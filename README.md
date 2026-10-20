@@ -13,6 +13,7 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | --- | --- | --- |
 | `GET /api/digest/today[?date=YYYY-MM-DD]` | `x-api-key` | Digest mais recente (ou da data). Lido pelo app e pelo widget. |
 | `POST /api/digest/refresh[?force=1]` | `x-api-key` | Coleta agora e monta o digest do dia se não existir. `force=1` refaz o do dia. |
+| `GET /api/content/{id}` | `x-api-key` | Texto completo do item em blocos (título, parágrafo, código), no idioma original. Extrai na hora se ainda não foi tentado. |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
@@ -28,6 +29,11 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 3. **Digest** (`src/digest`): pontuação = peso dos assuntos × 0,6 + peso do formato × 0,3 + engajamento × 0,1;
    cotas 4 tecnologia / 2 curiosidades / 1 mundo / 1 aleatório, no máximo 2 itens por assunto, 1 vaga de exploração.
    Falta de item numa categoria é completada com tecnologia. Um item nunca entra em dois digests.
+
+4. **Texto completo** (`src/extract`): para os itens do digest, baixa a página do artigo (respeitando o
+   `robots.txt`) e extrai o texto principal com o Readability da Mozilla — regras sobre o HTML, sem IA e sem
+   tradução: o texto fica no idioma original. Paywall, vídeo ou página curta ficam como `falhou` e o app
+   mostra só o resumo e o link. O texto é apagado depois de 30 dias; título e link ficam.
 
 Fontes, assuntos e ligações iniciais ficam em [db/migrations/002_seed.sql](db/migrations/002_seed.sql).
 Para adicionar fontes, crie uma nova migração (`003_...sql`).

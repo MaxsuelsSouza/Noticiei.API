@@ -93,6 +93,10 @@ export interface DigestView {
     format: string;
     topics: string[];
     isExploration: boolean;
+    /** Texto completo extraído e disponível em GET /api/content/{id}. */
+    hasText: boolean;
+    textStatus: string;
+    readingMinutes: number | null;
   }[];
 }
 
@@ -108,12 +112,13 @@ export async function getDigest(date?: string): Promise<DigestView | null> {
 
   const rows = (await db`
     select c.id, di.position, di.slot, c.title, coalesce(c.summary, '') as summary, c.url, s.name as source,
-           c.language, c.format, c.topics, di.is_exploration
+           c.language, c.format, c.topics, di.is_exploration, c.text_status, c.reading_minutes
     from digest_items di join contents c on c.id = di.content_id join sources s on s.id = c.source_id
     where di.digest_id = ${digest.id}
     order by di.position`) as {
     id: string; position: number; slot: Category; title: string; summary: string; url: string; source: string;
     language: string; format: string; topics: string[]; is_exploration: boolean;
+    text_status: string; reading_minutes: number | null;
   }[];
 
   return {
@@ -131,6 +136,9 @@ export async function getDigest(date?: string): Promise<DigestView | null> {
       format: r.format,
       topics: r.topics,
       isExploration: r.is_exploration,
+      hasText: r.text_status === "ok",
+      textStatus: r.text_status,
+      readingMinutes: r.reading_minutes,
     })),
   };
 }

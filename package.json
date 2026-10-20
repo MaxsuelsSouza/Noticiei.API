@@ -12,8 +12,10 @@
     "daily": "node --env-file-if-exists=.env --import tsx scripts/run-daily.ts"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@neondatabase/serverless": "^1.2.0",
     "franc-min": "^6.2.0",
+    "linkedom": "^0.18.13",
     "rss-parser": "^3.13.0"
   },
   "devDependencies": {
