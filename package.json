@@ -8,8 +8,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "db:migrate": "tsx scripts/migrate.ts",
-    "daily": "tsx scripts/run-daily.ts"
+    "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
+    "daily": "node --env-file-if-exists=.env --import tsx scripts/run-daily.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
