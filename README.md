@@ -16,6 +16,18 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/content/{id}` | `x-api-key` | Texto completo do item em blocos (título, parágrafo, código), no idioma original. Extrai na hora se ainda não foi tentado. |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
+| `POST /api/checkin` | `x-checkin-key` | Faz check-in no site da academia. Corpo `{source:"wellhub", notifiedAt}`. No máximo um por dia; notificação com mais de 2h é ignorada. |
+| `GET /api/checkin` | `x-checkin-key` | Histórico dos últimos 14 check-ins. |
+
+## Check-in automático
+
+O app Android escuta a notificação de check-in confirmado do Wellhub e chama `POST /api/checkin`.
+A API reserva o dia na tabela `checkins` (então notificações repetidas não geram dois check-ins) e chama o
+cliente do site em [src/checkin/borracha.ts](src/checkin/borracha.ts). Uma tentativa que falhou é refeita na
+próxima chamada do mesmo dia; o app recebe `502` nesse caso e pode tentar de novo.
+
+> **Pendente:** o cliente do site ainda lança `GymSiteNotConfigured`. Falta capturar as requisições de login e de
+> check-in do site (instruções no topo do arquivo).
 
 ## Como funciona a rotina diária
 
@@ -58,6 +70,8 @@ npm test && npm run typecheck
    - `DATABASE_URL` — string do Neon
    - `APP_API_KEY` — `openssl rand -hex 32` (a mesma vai para o app)
    - `CRON_SECRET` — `openssl rand -hex 32` (a Vercel usa automaticamente no cron)
+   - `CHECKIN_API_KEY` — `openssl rand -hex 32` (vai para o listener de check-in do app)
+   - `BORRACHA_EMAIL` / `BORRACHA_PASSWORD` — login de aluno no site da academia
    - `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — opcionais, app do tipo *script* em https://www.reddit.com/prefs/apps
 3. Depois do primeiro deploy, gere o primeiro digest sem esperar o cron:
    `curl -X POST -H "x-api-key: $APP_API_KEY" https://<seu-projeto>.vercel.app/api/digest/refresh`

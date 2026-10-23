@@ -14,6 +14,13 @@ export const env = {
   get cronSecret() {
     return required("CRON_SECRET");
   },
+  /** Chave própria do check-in: separada da APP_API_KEY para que um vazamento de uma não libere a outra. */
+  get checkinApiKey() {
+    return required("CHECKIN_API_KEY");
+  },
+  get borracha() {
+    return { email: required("BORRACHA_EMAIL"), password: required("BORRACHA_PASSWORD") };
+  },
   get reddit() {
     const clientId = process.env.REDDIT_CLIENT_ID;
     const clientSecret = process.env.REDDIT_CLIENT_SECRET;
