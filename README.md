@@ -27,7 +27,11 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
    como título), formato por sinais no título, idioma por trigramas (`franc`). Assuntos que aparecem juntos
    reforçam a ligação no grafo (`topic_links`).
 3. **Digest** (`src/digest`): pontuação = peso dos assuntos × 0,6 + peso do formato × 0,3 + engajamento × 0,1;
-   cotas 4 tecnologia / 2 curiosidades / 1 mundo / 1 aleatório, no máximo 2 itens por assunto, 1 vaga de exploração.
+   cotas 4 tecnologia / 4 curiosidades / 4 mundo / 1 aleatório (13 itens), no máximo 2 itens por assunto, 1 vaga de exploração.
+   O foco de cada categoria vem dos pesos de interesse semeados em
+   [005_digest_trilha.sql](db/migrations/005_digest_trilha.sql): tecnologia no estilo da trilha de estudos (fundamentos,
+   clean code e patterns, APIs, DDD, system design), curiosidades com vulnerabilidades novas e "como funciona", e mundo com
+   tecnologias que estão mudando algo (IA, chips, energia, biotech, robótica).
    Falta de item numa categoria é completada com tecnologia. Um item nunca entra em dois digests.
 
 4. **Texto completo** (`src/extract`): para os itens do digest, baixa a página do artigo (respeitando o
@@ -35,7 +39,10 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
    tradução: o texto fica no idioma original. Paywall, vídeo ou página curta ficam como `falhou` e o app
    mostra só o resumo e o link. O texto é apagado depois de 30 dias; título e link ficam.
 
-Fontes, assuntos e ligações iniciais ficam em [db/migrations/002_seed.sql](db/migrations/002_seed.sql).
+Fontes, assuntos e ligações iniciais ficam em [db/migrations/002_seed.sql](db/migrations/002_seed.sql) e
+[005_digest_trilha.sql](db/migrations/005_digest_trilha.sql). Fontes com `lock_category` nunca mudam de categoria pelo
+assunto (ex.: MIT Technology Review fica sempre em mundo). Palavras-chave que começam com `re:` são expressões regulares
+(ex.: `how <algo> works`).
 Para adicionar fontes, crie uma nova migração (`003_...sql`).
 
 ## Desenvolvimento local

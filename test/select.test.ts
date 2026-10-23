@@ -8,17 +8,17 @@ const make = (category: Candidate["category"], topics: string[], engagement = 0,
   id: nextId++, category, topics, format, engagement, sourceType: "rss",
 });
 
-test("preenche as cotas 4/2/1/1 sem repetir item", () => {
+test("preenche as cotas 4/4/4/1 sem repetir item", () => {
   const candidates = [
     ...Array.from({ length: 10 }, (_, i) => make("tecnologia", [`t${i}`])),
-    ...Array.from({ length: 4 }, (_, i) => make("curiosidades", [`c${i}`])),
-    ...Array.from({ length: 3 }, (_, i) => make("mundo", [`m${i}`])),
+    ...Array.from({ length: 6 }, (_, i) => make("curiosidades", [`c${i}`])),
+    ...Array.from({ length: 6 }, (_, i) => make("mundo", [`m${i}`])),
   ];
   const picks = selectDigest(candidates, noWeights, undefined, () => 0);
-  assert.equal(picks.length, 8);
-  assert.equal(new Set(picks.map((p) => p.id)).size, 8);
+  assert.equal(picks.length, 13);
+  assert.equal(new Set(picks.map((p) => p.id)).size, 13);
   const count = (slot: string) => picks.filter((p) => p.slot === slot).length;
-  assert.deepEqual([count("tecnologia"), count("curiosidades"), count("mundo"), count("aleatorio")], [4, 2, 1, 1]);
+  assert.deepEqual([count("tecnologia"), count("curiosidades"), count("mundo"), count("aleatorio")], [4, 4, 4, 1]);
   assert.equal(picks.filter((p) => p.isExploration).length, 1);
 });
 
@@ -37,5 +37,19 @@ test("perfil de interesse ordena por peso e falta de categoria é completada com
   };
   const picks = selectDigest([...others, liked], weights, undefined, () => 0);
   assert.equal(picks[0]!.id, liked.id);
-  assert.equal(picks.length, 8);
+  assert.equal(picks.length, 9); // só há 9 candidatos: todos entram, completando as cotas vazias
+});
+
+test("assuntos com peso alto ganham dentro da categoria (vulnerabilidade antes de ciência)", () => {
+  const ciencia = Array.from({ length: 4 }, () => make("curiosidades", ["ciencia"], 100));
+  const vulns = [make("curiosidades", ["vulnerabilidades"]), make("curiosidades", ["vulnerabilidades"])];
+  const comoFunciona = [make("curiosidades", ["como-funciona"]), make("curiosidades", ["como-funciona"])];
+  const weights: Weights = {
+    topic: new Map([["ciencia", 0.35], ["vulnerabilidades", 0.95], ["como-funciona", 0.95]]),
+    format: new Map(),
+  };
+  const picks = selectDigest([...ciencia, ...vulns, ...comoFunciona], weights, undefined, () => 0);
+  // as 4 vagas da cota (as primeiras escolhidas); depois disso a sobra de outras categorias é completada com o que houver
+  const curiosidades = picks.filter((p) => p.slot === "curiosidades").slice(0, 4).map((p) => p.id);
+  assert.deepEqual(new Set(curiosidades), new Set([...vulns, ...comoFunciona].map((c) => c.id)));
 });
