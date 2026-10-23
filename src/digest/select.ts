@@ -27,7 +27,8 @@ export interface Pick {
 }
 
 export const DEFAULT_OPTIONS: DigestOptions = {
-  quotas: { tecnologia: 4, curiosidades: 2, mundo: 1, aleatorio: 1 },
+  // Curiosidades: vulnerabilidades novas e "como funciona"; mundo: tecnologias que estão mudando algo.
+  quotas: { tecnologia: 4, curiosidades: 4, mundo: 4, aleatorio: 1 },
   maxPerTopic: 2,
   explorationSlots: 1,
 };

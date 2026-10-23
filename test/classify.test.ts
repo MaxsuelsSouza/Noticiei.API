@@ -49,3 +49,34 @@ test("idioma por trigramas, com fallback para texto curto", () => {
   assert.equal(detectLanguage("The government announced new measures today to curb inflation in the country", "pt"), "en");
   assert.equal(detectLanguage("Oi", "pt"), "pt");
 });
+
+const extra: Topic[] = [
+  ...topics,
+  { slug: "vulnerabilidades", category: "curiosidades", keywords: ["cve", "re:cve-\\d{4}-\\d+", "ransomware", "exploit"] },
+  { slug: "como-funciona", category: "curiosidades", keywords: ["re:how (?:the |a |an )?[\\p{L}\\p{N} .#+/'-]{2,40}? works?", "under the hood"] },
+  { slug: "ia", category: "tecnologia", keywords: ["ai", "llm", "llms", "artificial intelligence"] },
+  { slug: "chips-hardware", category: "mundo", keywords: ["chip", "chips", "tsmc"] },
+];
+
+test("palavra-chave com re: casa padrões como 'how X works' e números de CVE", () => {
+  const how = classify({ title: "How DNS works", summary: "", tags: [] }, tech, extra);
+  assert.deepEqual(how.topics, ["como-funciona"]);
+  assert.equal(how.category, "curiosidades");
+  const cve = classify({ title: "CVE-2026-41234 in OpenSSH", summary: "", tags: [] }, tech, extra);
+  assert.equal(cve.topics[0], "vulnerabilidades");
+  assert.equal(cve.category, "curiosidades");
+  // não casa no meio de outra palavra
+  assert.deepEqual(classify({ title: "Showcase of networks", summary: "", tags: [] }, tech, extra).topics, []);
+});
+
+test("fonte com lock_category nunca muda de categoria, mesmo com assunto forte", () => {
+  const mitTr = { default_category: "mundo" as const, is_official: false, lock_category: true };
+  const title = "AI AI AI: how LLMs and artificial intelligence change everything";
+  assert.equal(classify({ title, summary: "", tags: [] }, world, extra).category, "tecnologia"); // sem trava: pula
+  assert.equal(classify({ title, summary: "", tags: [] }, mitTr, extra).category, "mundo"); // com trava: fica
+});
+
+test("assunto de mundo em fonte de tecnologia leva o item para mundo", () => {
+  const r = classify({ title: "TSMC starts new chip production", summary: "", tags: [] }, tech, extra);
+  assert.equal(r.category, "mundo");
+});

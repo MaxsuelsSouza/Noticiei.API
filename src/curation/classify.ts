@@ -21,6 +21,8 @@ const MIN_TOPIC_SCORE = 3;
 const STRONG_TOPIC_SCORE = 6;
 
 function keywordPattern(keyword: string): RegExp {
+  // "re:" = expressão regular, para padrões como "how <algo> works" que palavra fixa não pega.
+  if (keyword.startsWith("re:")) return new RegExp(`(?<![\\p{L}\\p{N}])(?:${keyword.slice(3)})(?![\\p{L}\\p{N}])`, "giu");
   const escaped = keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
   // \b não funciona com "c#" ou ".net"; a borda é "não ser letra ou número".
   return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "giu");
@@ -39,7 +41,7 @@ function countMatches(text: string, keyword: string): number {
 export function scoreTopics(item: Pick<RawItem, "title" | "summary" | "tags">, topics: Topic[]): Map<string, number> {
   // Tags da fonte (subreddit, tag do dev.to) valem como título.
   const head = `${item.title} ${item.tags.join(" ")}`.toLowerCase();
-  const body = item.summary.toLowerCase();
+  const body = (item.summary ?? "").toLowerCase();
   const scores = new Map<string, number>();
   for (const topic of topics) {
     let score = 0;
@@ -71,7 +73,7 @@ export function detectFormat(item: Pick<RawItem, "title" | "tags">, source: Pick
 
 export function classify(
   item: Pick<RawItem, "title" | "summary" | "tags">,
-  source: Pick<Source, "default_category" | "is_official">,
+  source: Pick<Source, "default_category" | "is_official"> & Partial<Pick<Source, "lock_category">>,
   topics: Topic[],
 ): Classification {
   const scores = scoreTopics(item, topics);
@@ -80,7 +82,7 @@ export function classify(
 
   let category: Category = source.default_category;
   const main = ranked[0];
-  if (main) {
+  if (main && !source.lock_category) {
     const topic = bySlug.get(main[0])!;
     const sameAsSource = topic.category === source.default_category;
     if (source.default_category === "tecnologia" || sameAsSource || main[1] >= STRONG_TOPIC_SCORE) {

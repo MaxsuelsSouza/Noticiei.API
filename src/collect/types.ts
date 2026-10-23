@@ -9,6 +9,8 @@ export interface Source {
   default_category: Category;
   language: string;
   is_official: boolean;
+  /** Itens desta fonte nunca mudam de categoria, mesmo com assunto forte de outra (ex.: notícia de IA no MIT Tech Review fica em mundo). */
+  lock_category: boolean;
 }
 
 /** Item como veio da fonte, antes da curadoria. */
