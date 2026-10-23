@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   if (!isCron(request)) return unauthorized();
   if (localDate() !== RUN_ON) return json({ skipped: true, reason: `só roda em ${RUN_ON}` });
 
-  const report = await runDaily({ force: true });
+  const report = await runDaily({ force: true, job: "once" });
   console.log(JSON.stringify(report));
   return json(report);
 }

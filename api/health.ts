@@ -1,5 +1,6 @@
 import { sql } from "../src/db.js";
 import { isApp, json } from "../src/http.js";
+import { lastRun } from "../src/runs.js";
 
 export async function GET(request: Request) {
   if (!isApp(request)) {
@@ -8,7 +9,7 @@ export async function GET(request: Request) {
       select d.digest_date::text as date, d.created_at, count(di.*)::int as items
       from digests d left join digest_items di on di.digest_id = d.id
       group by d.id order by d.digest_date desc limit 1`) as { date: string; created_at: string; items: number }[];
-    return json({ ok: true, lastDigest: last ?? null });
+    return json({ ok: true, lastDigest: last ?? null, lastRun: await lastRun() });
   }
 
   const db = sql();

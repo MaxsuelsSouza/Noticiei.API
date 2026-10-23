@@ -7,6 +7,6 @@ export async function POST(request: Request) {
   if (!isApp(request)) return unauthorized();
 
   const force = new URL(request.url).searchParams.get("force") === "1";
-  const report = await runDaily({ force });
+  const report = await runDaily({ force, job: "refresh" });
   return json({ report, digest: await getDigest() });
 }
