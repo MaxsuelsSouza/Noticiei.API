@@ -119,7 +119,9 @@ async function collectOne(source: Source, topics: Topic[], robots: RobotsChecker
 export async function collectAll({ force = false } = {}): Promise<SourceReport[]> {
   const db = sql();
   const sources = (await db`
-    select id, name, type, address, default_category, language, is_official, lock_category
+    -- to_jsonb: funciona mesmo antes da migração 005 criar a coluna (deploy e migração em qualquer ordem)
+    select id, name, type, address, default_category, language, is_official,
+           coalesce((to_jsonb(sources) ->> 'lock_category')::boolean, false) as lock_category
     from sources
     where active
       and (${force} or last_collected_at is null
