@@ -14,6 +14,14 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/digest/today[?date=YYYY-MM-DD]` | `x-api-key` | Digest mais recente (ou da data). Lido pelo app e pelo widget. |
 | `POST /api/digest/refresh[?force=1]` | `x-api-key` | Coleta agora e monta o digest do dia se não existir. `force=1` refaz o do dia. |
 | `GET /api/content/{id}` | `x-api-key` | Texto completo do item em blocos (título, parágrafo, código), no idioma original. Extrai na hora se ainda não foi tentado. |
+| `GET /api/reservas?mes=YYYY-MM` | `x-api-key` | Reservas do mês (agenda e widgets de agendamentos). |
+| `PUT /api/reservas/{YYYY-MM-DD}` | `x-api-key` | Cria ou edita a reserva do dia (uma por dia): `{ nome, telefone, observacao?, pago? }`. |
+| `DELETE /api/reservas/{YYYY-MM-DD}` | `x-api-key` | Libera o dia. |
+| `GET /api/contas` | `x-api-key` | Contas em aberto e as pagas nos últimos 45 dias (lembrete de contas e widgets). |
+| `POST /api/contas` | `x-api-key` | Nova conta: `{ nome, valorCentavos, vencimento, repeticao?: uma_vez\|mensal\|parcelas, parcelaAtual?, parcelasTotal?, codigo?, lembreteVespera?, lembreteDia?, lembreteInsistir? }`. |
+| `PUT /api/contas/{id}` | `x-api-key` | Edita a conta (mesmo corpo). |
+| `PATCH /api/contas/{id}` | `x-api-key` | `{ pago: true }` marca como paga e cria a próxima se for mensal/parcelada; `{ pago: false }` desfaz e apaga a próxima ainda em aberto. |
+| `DELETE /api/contas/{id}` | `x-api-key` | Remove a conta. |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
