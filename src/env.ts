@@ -14,6 +14,14 @@ export const env = {
   get cronSecret() {
     return required("CRON_SECRET");
   },
+  /** Login de aluno no site da academia. */
+  get borracha() {
+    return { email: required("BORRACHA_EMAIL"), password: required("BORRACHA_PASSWORD") };
+  },
+  /** Unidade em que o aluno treina; aulas de outra unidade não são pedidas automaticamente. */
+  get borrachaUnidade() {
+    return process.env.BORRACHA_UNIDADE || "Espinheiro";
+  },
   get reddit() {
     const clientId = process.env.REDDIT_CLIENT_ID;
     const clientSecret = process.env.REDDIT_CLIENT_SECRET;
