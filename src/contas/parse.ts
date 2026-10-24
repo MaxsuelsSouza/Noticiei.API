@@ -4,9 +4,14 @@ export type Repeticao = "uma_vez" | "mensal" | "parcelas";
 
 export interface DadosConta {
   nome: string;
-  valorCentavos: number;
+  /** null quando ainda não se sabe o valor (ex.: energia). */
+  valorCentavos: number | null;
+  /** A próxima (mensal/parcelada) nasce sem valor. */
+  valorVariavel: boolean;
   vencimento: string; // YYYY-MM-DD
   repeticao: Repeticao;
+  /** "Todo dia N" das contas mensais/parceladas; null em uma vez. */
+  diaVencimento: number | null;
   parcelaAtual: number | null;
   parcelasTotal: number | null;
   codigo: string | null;
@@ -30,8 +35,8 @@ function inteiro(value: unknown, campo: string, min: number, max: number): numbe
   return value;
 }
 
-function booleano(value: unknown, campo: string): boolean {
-  if (value === undefined) return true;
+function booleano(value: unknown, campo: string, padrao = true): boolean {
+  if (value === undefined) return padrao;
   if (typeof value !== "boolean") throw new Error(`${campo} deve ser true ou false`);
   return value;
 }
@@ -45,7 +50,7 @@ export function parseConta(body: unknown): DadosConta {
   if (!nome) throw new Error("nome é obrigatório");
   if (nome.length > 80) throw new Error("nome passa de 80 caracteres");
 
-  const valorCentavos = inteiro(b.valorCentavos, "valorCentavos", 1, 100_000_000);
+  const valorCentavos = b.valorCentavos === undefined || b.valorCentavos === null ? null : inteiro(b.valorCentavos, "valorCentavos", 1, 100_000_000);
 
   if (typeof b.vencimento !== "string" || !isDia(b.vencimento)) throw new Error("vencimento deve ser YYYY-MM-DD");
 
@@ -59,6 +64,13 @@ export function parseConta(body: unknown): DadosConta {
     parcelaAtual = inteiro(b.parcelaAtual ?? 1, "parcelaAtual", 1, parcelasTotal);
   }
 
+  const repete = repeticao !== "uma_vez";
+  const diaVencimento = !repete
+    ? null
+    : b.diaVencimento === undefined || b.diaVencimento === null
+      ? Number(b.vencimento.slice(8, 10))
+      : inteiro(b.diaVencimento, "diaVencimento", 1, 31);
+
   let codigo: string | null = null;
   if (b.codigo !== undefined && b.codigo !== null) {
     if (typeof b.codigo !== "string") throw new Error("codigo deve ser texto");
@@ -69,8 +81,10 @@ export function parseConta(body: unknown): DadosConta {
   return {
     nome,
     valorCentavos,
+    valorVariavel: repete && booleano(b.valorVariavel, "valorVariavel", false),
     vencimento: b.vencimento,
     repeticao,
+    diaVencimento,
     parcelaAtual,
     parcelasTotal,
     codigo,
@@ -80,11 +94,14 @@ export function parseConta(body: unknown): DadosConta {
   };
 }
 
-/** Mesmo dia no mês seguinte; vira o último dia quando o mês é mais curto (31/01 → 28/02). */
-export function nextMonth(dia: string): string {
+/**
+ * Vencimento no mês seguinte, no dia fixo da conta ("todo dia 31" vira 28/02 e volta a 31/03);
+ * sem dia fixo, usa o dia do vencimento atual.
+ */
+export function nextMonth(dia: string, diaVencimento: number | null = null): string {
   const [y, m, d] = dia.split("-").map(Number) as [number, number, number];
   const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const next = new Date(Date.UTC(y, m, Math.min(d, last)));
+  const next = new Date(Date.UTC(y, m, Math.min(diaVencimento ?? d, last)));
   return next.toISOString().slice(0, 10);
 }
 
@@ -94,7 +111,8 @@ export function proxima(conta: DadosConta): DadosConta | null {
   if (conta.repeticao === "parcelas" && conta.parcelaAtual! >= conta.parcelasTotal!) return null;
   return {
     ...conta,
-    vencimento: nextMonth(conta.vencimento),
+    valorCentavos: conta.valorVariavel ? null : conta.valorCentavos,
+    vencimento: nextMonth(conta.vencimento, conta.diaVencimento),
     parcelaAtual: conta.repeticao === "parcelas" ? conta.parcelaAtual! + 1 : null,
   };
 }

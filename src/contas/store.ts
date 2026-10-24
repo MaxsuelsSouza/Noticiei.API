@@ -4,9 +4,11 @@ import { proxima, type Conta, type DadosConta } from "./parse.js";
 interface Row {
   id: string;
   nome: string;
-  valor_centavos: number;
+  valor_centavos: number | null;
+  valor_variavel: boolean;
   vencimento: string;
   repeticao: Conta["repeticao"];
+  dia_vencimento: number | null;
   parcela_atual: number | null;
   parcelas_total: number | null;
   codigo: string | null;
@@ -21,8 +23,10 @@ const toConta = (r: Row): Conta => ({
   id: Number(r.id),
   nome: r.nome,
   valorCentavos: r.valor_centavos,
+  valorVariavel: r.valor_variavel,
   vencimento: r.vencimento,
   repeticao: r.repeticao,
+  diaVencimento: r.dia_vencimento,
   parcelaAtual: r.parcela_atual,
   parcelasTotal: r.parcelas_total,
   codigo: r.codigo,
@@ -34,8 +38,8 @@ const toConta = (r: Row): Conta => ({
 });
 
 // vencimento sai como texto: o driver converteria date em Date no fuso do servidor.
-const COLUNAS = `id, nome, valor_centavos, to_char(vencimento, 'YYYY-MM-DD') as vencimento, repeticao, parcela_atual,
-  parcelas_total, codigo, lembrete_vespera, lembrete_dia, lembrete_insistir, pago_em, origem_id`;
+const COLUNAS = `id, nome, valor_centavos, valor_variavel, to_char(vencimento, 'YYYY-MM-DD') as vencimento, repeticao,
+  dia_vencimento, parcela_atual, parcelas_total, codigo, lembrete_vespera, lembrete_dia, lembrete_insistir, pago_em, origem_id`;
 
 /** Todas em aberto e as pagas nos últimos 45 dias (o app mostra só as do mês corrente no fuso dele). */
 export async function listContas(): Promise<Conta[]> {
@@ -50,11 +54,12 @@ export async function listContas(): Promise<Conta[]> {
 async function insert(dados: DadosConta, origemId: number | null = null): Promise<Conta> {
   const rows = (await sql().query(
     `insert into contas (nome, valor_centavos, vencimento, repeticao, parcela_atual, parcelas_total, codigo,
-       lembrete_vespera, lembrete_dia, lembrete_insistir, origem_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       lembrete_vespera, lembrete_dia, lembrete_insistir, origem_id, valor_variavel, dia_vencimento)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      returning ${COLUNAS}`,
     [dados.nome, dados.valorCentavos, dados.vencimento, dados.repeticao, dados.parcelaAtual, dados.parcelasTotal,
-      dados.codigo, dados.lembreteVespera, dados.lembreteDia, dados.lembreteInsistir, origemId],
+      dados.codigo, dados.lembreteVespera, dados.lembreteDia, dados.lembreteInsistir, origemId, dados.valorVariavel,
+      dados.diaVencimento],
   )) as Row[];
   return toConta(rows[0]!);
 }
@@ -65,11 +70,12 @@ export async function updateConta(id: number, dados: DadosConta): Promise<Conta 
   const rows = (await sql().query(
     `update contas set nome = $2, valor_centavos = $3, vencimento = $4, repeticao = $5, parcela_atual = $6,
        parcelas_total = $7, codigo = $8, lembrete_vespera = $9, lembrete_dia = $10, lembrete_insistir = $11,
-       updated_at = now()
+       valor_variavel = $12, dia_vencimento = $13, updated_at = now()
      where id = $1
      returning ${COLUNAS}`,
     [id, dados.nome, dados.valorCentavos, dados.vencimento, dados.repeticao, dados.parcelaAtual, dados.parcelasTotal,
-      dados.codigo, dados.lembreteVespera, dados.lembreteDia, dados.lembreteInsistir],
+      dados.codigo, dados.lembreteVespera, dados.lembreteDia, dados.lembreteInsistir, dados.valorVariavel,
+      dados.diaVencimento],
   )) as Row[];
   return rows[0] ? toConta(rows[0]) : null;
 }

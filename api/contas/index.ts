@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   return json({ contas: await listContas() });
 }
 
-/** Nova conta. Corpo: { nome, valorCentavos, vencimento, repeticao?, parcelaAtual?, parcelasTotal?, codigo?, lembrete*? }. */
+/** Nova conta. Corpo: { nome, vencimento, valorCentavos?, valorVariavel?, repeticao?, diaVencimento?, parcelaAtual?, parcelasTotal?, codigo?, lembrete*? }. */
 export async function POST(request: Request) {
   if (!isApp(request)) return unauthorized();
 
