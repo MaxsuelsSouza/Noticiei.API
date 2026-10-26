@@ -24,6 +24,8 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `DELETE /api/contas/{id}` | `x-api-key` | Remove a conta. |
 | `POST /api/checkin` | `x-api-key` | Pede o check-in no site da academia. Corpo `{ source?: app\|widget\|auto, dryRun? }`. Escolhe a aula pelo horário e registra a tentativa. `502` só em erro de verdade; sem aula, fora da regra ou já feito respondem `200` com `status: skipped`. |
 | `GET /api/checkin[?limit=50]` | `x-api-key` | Histórico das tentativas (ok, duplicate, skipped, error), com a mensagem de erro e a etapa em que falhou. |
+| `GET /api/trilha` | `x-api-key` | Personalização da trilha de estudos (anotações, links, ajustes de material, tópicos e cursos criados) no formato do app; `updatedAt: null` = nunca gravada. |
+| `PUT /api/trilha` | `x-api-key` | Grava a personalização inteira (substitui a anterior), em tabelas `trilha_*` ([011](db/migrations/011_trilha_extras.sql)). |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
