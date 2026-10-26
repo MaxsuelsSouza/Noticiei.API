@@ -66,6 +66,45 @@ async function fetchHackerNews(source: Source): Promise<RawItem[]> {
   }));
 }
 
+const POPULAR_MIN_POINTS = 20;
+const POPULAR_HITS = 50;
+
+/**
+ * Artigos mais populares de um blog, pela pontuação no Hacker News (API pública do Algolia).
+ * O RSS só traz os últimos posts e não diz o que foi mais lido; isso serve de "mais acessado".
+ * O endereço da fonte é o domínio e caminho do blog, ex.: "netflixtechblog.com".
+ */
+async function fetchPopular(source: Source): Promise<RawItem[]> {
+  const params = new URLSearchParams({
+    query: source.address,
+    restrictSearchableAttributes: "url",
+    tags: "story",
+    hitsPerPage: String(POPULAR_HITS),
+    numericFilters: `points>${POPULAR_MIN_POINTS}`,
+  });
+  const data = (await (await get(`https://hn.algolia.com/api/v1/search?${params}`)).json()) as { hits: HnHit[] };
+  // A busca é por texto: confere se o link é mesmo do blog.
+  const prefix = source.address.toLowerCase();
+  return data.hits
+    .filter((hit): hit is HnHit & { url: string } => {
+      if (!hit.url) return false;
+      try {
+        const url = new URL(hit.url);
+        return `${url.hostname.replace(/^www\./, "")}${url.pathname}`.toLowerCase().startsWith(prefix);
+      } catch {
+        return false;
+      }
+    })
+    .map((hit) => ({
+      url: hit.url,
+      title: hit.title,
+      summary: "",
+      publishedAt: toDate(hit.created_at_i),
+      engagement: hit.points ?? 0,
+      tags: [],
+    }));
+}
+
 interface DevToArticle {
   title: string;
   description: string | null;
@@ -156,5 +195,7 @@ export function fetchSource(source: Source): Promise<RawItem[]> {
       return fetchDevTo(source);
     case "reddit":
       return fetchReddit(source);
+    case "popular":
+      return fetchPopular(source);
   }
 }

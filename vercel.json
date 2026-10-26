@@ -10,9 +10,10 @@
       "schedule": "0 20 * * *"
     }
   ],
+  "fluid": true,
   "functions": {
     "api/**/*.ts": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "includeFiles": "db/migrations/**"
     }
   }

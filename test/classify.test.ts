@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classify, detectFormat, type Topic } from "../src/curation/classify.js";
+import { classify, isTechnology, detectFormat, type Topic } from "../src/curation/classify.js";
 import { detectLanguage } from "../src/curation/language.js";
 
 const topics: Topic[] = [
@@ -52,7 +52,7 @@ test("idioma por trigramas, com fallback para texto curto", () => {
 
 const extra: Topic[] = [
   ...topics,
-  { slug: "vulnerabilidades", category: "curiosidades", keywords: ["cve", "re:cve-\\d{4}-\\d+", "ransomware", "exploit"] },
+  { slug: "vulnerabilidades", category: "hackernews", keywords: ["cve", "re:cve-\\d{4}-\\d+", "ransomware", "exploit"] },
   { slug: "como-funciona", category: "curiosidades", keywords: ["re:how (?:the |a |an )?[\\p{L}\\p{N} .#+/'-]{2,40}? works?", "under the hood"] },
   { slug: "ia", category: "tecnologia", keywords: ["ai", "llm", "llms", "artificial intelligence"] },
   { slug: "chips-hardware", category: "mundo", keywords: ["chip", "chips", "tsmc"] },
@@ -64,7 +64,7 @@ test("palavra-chave com re: casa padrões como 'how X works' e números de CVE",
   assert.equal(how.category, "curiosidades");
   const cve = classify({ title: "CVE-2026-41234 in OpenSSH", summary: "", tags: [] }, tech, extra);
   assert.equal(cve.topics[0], "vulnerabilidades");
-  assert.equal(cve.category, "curiosidades");
+  assert.equal(cve.category, "hackernews");
   // não casa no meio de outra palavra
   assert.deepEqual(classify({ title: "Showcase of networks", summary: "", tags: [] }, tech, extra).topics, []);
 });
@@ -79,4 +79,16 @@ test("fonte com lock_category nunca muda de categoria, mesmo com assunto forte",
 test("assunto de mundo em fonte de tecnologia leva o item para mundo", () => {
   const r = classify({ title: "TSMC starts new chip production", summary: "", tags: [] }, tech, extra);
   assert.equal(r.category, "mundo");
+});
+
+test("aleatório: item de tecnologia é reconhecido e descartado", () => {
+  const item = (title: string, summary = "") => ({ title, summary, tags: [] });
+  assert.equal(isTechnology(item("Man builds giant robot out of scrap"), extra), true);
+  assert.equal(isTechnology(item("Viral TikTok shows cat opening fridge"), extra), true);
+  assert.equal(isTechnology(item("CVE-2026-1111 found in router"), extra), true);
+  assert.equal(isTechnology(item("TSMC chips shortage"), extra), true);
+  assert.equal(isTechnology(item("Woman finds 30-pound potato in her garden", "The giant potato was weighed at the fair."), extra), false);
+  assert.equal(isTechnology(item("Goat elected honorary mayor of small town"), extra), false);
+  // "ai" só como palavra inteira
+  assert.equal(isTechnology(item("Fair raises record money for charity"), extra), false);
 });

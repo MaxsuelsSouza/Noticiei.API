@@ -2,7 +2,7 @@ import type { Category, RawItem, Source } from "../collect/types.js";
 
 export interface Topic {
   slug: string;
-  category: Exclude<Category, "aleatorio">;
+  category: Exclude<Category, "acompanhar" | "aleatorio">;
   keywords: string[];
 }
 
@@ -95,4 +95,20 @@ export function classify(
     topics: ranked.slice(0, 4).map(([slug]) => slug),
     format: detectFormat(item, source),
   };
+}
+
+/** Assuntos de "mundo" que também são tecnologia (IA, chips, energia, biotech, robótica). */
+const TECH_WORLD_TOPICS = new Set(["ia-sociedade", "chips-hardware", "energia-tech", "biotech", "robotica"]);
+/** Palavras de tecnologia do dia a dia que os assuntos da trilha não cobrem. */
+const TECH_WORDS =
+  /(?<![\p{L}\p{N}])(apps?|aplicativos?|smartphones?|celular(es)?|iphones?|android|internet|online|websites?|computers?|computadores?|software|robots?|rob[ôo]s?|drones?|ai|ia|chatgpt|chatbots?|algorithms?|tiktok|youtube|instagram|facebook|twitter|google|apple|microsoft|amazon|meta|tesla|spacex|bitcoin|crypto|cripto|video ?games?|videogames?|gaming|hackers?|tech|technology|tecnologia|gadgets?|virtual reality|vr|wi-?fi|bluetooth)(?![\p{L}\p{N}])/iu;
+
+/** Item de tecnologia: tem assunto de tecnologia/segurança (ou de "mundo" tecnológico) ou palavra típica de tecnologia. */
+export function isTechnology(item: Pick<RawItem, "title" | "summary" | "tags">, topics: Topic[]): boolean {
+  const bySlug = new Map(topics.map((t) => [t.slug, t]));
+  for (const slug of scoreTopics(item, topics).keys()) {
+    const topic = bySlug.get(slug)!;
+    if (topic.category === "tecnologia" || topic.category === "hackernews" || TECH_WORLD_TOPICS.has(slug)) return true;
+  }
+  return TECH_WORDS.test(`${item.title} ${item.summary ?? ""}`);
 }

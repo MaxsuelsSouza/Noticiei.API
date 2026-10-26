@@ -1,10 +1,28 @@
 import { sql } from "../db.js";
-import type { Category } from "../collect/types.js";
+import { RobotsChecker } from "../collect/robots.js";
+import { CATEGORIES, type Category } from "../collect/types.js";
+import { extractMany } from "../extract/extract.js";
 import { localDate } from "../time.js";
-import { selectDigest, type Candidate, type Weights } from "./select.js";
+import { DEFAULT_OPTIONS, selectDigest, type Candidate, type Pick, type Weights } from "./select.js";
 
 const CANDIDATE_WINDOW_DAYS = 3;
-const SLOT_ORDER: Category[] = ["tecnologia", "curiosidades", "mundo", "aleatorio"];
+/** Rodadas de "seleciona → extrai o texto → troca quem falhou". */
+const MAX_ROUNDS = 10;
+const EXTRACT_CONCURRENCY = 10;
+/** Tempo para extrair os textos (a função da Vercel tem 300 s no total, com Fluid Compute, e a coleta vem antes). */
+const EXTRACT_BUDGET_MS = 90_000;
+
+/** Sorteio repetível (mulberry32): a mesma data sorteia igual em todas as rodadas, então só muda quem falhou. */
+function seededRandom(seed: string): () => number {
+  let state = [...seed].reduce((h, ch) => Math.imul(h ^ ch.charCodeAt(0), 16777619), 2166136261) >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 export interface BuildResult {
   date: string;
@@ -19,8 +37,11 @@ async function loadWeights(): Promise<Weights> {
   return weights;
 }
 
-/** Monta o digest do dia, uma vez só. Com force, desfaz o digest do dia e monta de novo. */
-export async function buildDigest({ date = localDate(), force = false } = {}): Promise<BuildResult> {
+/**
+ * Monta o digest do dia, uma vez só. Com force, desfaz o digest do dia e monta de novo.
+ * Só entra item com o texto extraído: quem não deu para ler no app é trocado pelo próximo candidato.
+ */
+export async function buildDigest({ date = localDate(), force = false, budgetMs = EXTRACT_BUDGET_MS } = {}): Promise<BuildResult> {
   const db = sql();
 
   if (force) {
@@ -36,21 +57,45 @@ export async function buildDigest({ date = localDate(), force = false } = {}): P
     if (existing) return { date, status: "ja-existia", items: existing.items };
   }
 
-  const candidates = (
-    (await db`
-      select c.id, c.category, c.topics, c.format, c.engagement, s.type as source_type
+  // Os blogs acompanhados não têm janela: o mais popular de um blog pode ter sido coletado há semanas.
+  const rows = (await db`
+      select c.id, c.source_id, c.category, c.topics, c.format, c.engagement, c.url, c.language, c.text_status,
+             extract(epoch from c.published_at) * 1000 as published_ms,
+             s.type as source_type, to_jsonb(s) ->> 'follow_key' as follow_key
       from contents c join sources s on s.id = c.source_id
       where c.status = 'classificado'
-        and c.collected_at > now() - make_interval(days => ${CANDIDATE_WINDOW_DAYS})`) as {
-      id: string; category: Category; topics: string[]; format: string; engagement: number; source_type: string;
-    }[]
-  ).map<Candidate>((r) => ({ ...r, id: Number(r.id), sourceType: r.source_type }));
+        and c.text_status in ('pendente', 'ok')
+        and (c.collected_at > now() - make_interval(days => ${CANDIDATE_WINDOW_DAYS}) or c.category = 'acompanhar')`) as {
+    id: string; source_id: string; category: Category; topics: string[]; format: string; engagement: number; url: string; language: string;
+    text_status: string; published_ms: string | null; source_type: string; follow_key: string | null;
+  }[];
 
-  if (candidates.length === 0) return { date, status: "sem-conteudo", items: 0 };
+  if (rows.length === 0) return { date, status: "sem-conteudo", items: 0 };
 
-  const picks = selectDigest(candidates, await loadWeights()).sort(
-    (a, b) => SLOT_ORDER.indexOf(a.slot) - SLOT_ORDER.indexOf(b.slot),
-  );
+  const byId = new Map(rows.map((r) => [Number(r.id), r]));
+  const textStatus = new Map(rows.map((r) => [Number(r.id), r.text_status]));
+  let pool = rows.map<Candidate>((r) => ({
+    id: Number(r.id), sourceId: Number(r.source_id), category: r.category, topics: r.topics, format: r.format, engagement: r.engagement,
+    sourceType: r.source_type, followKey: r.follow_key, publishedAt: r.published_ms === null ? null : Number(r.published_ms),
+  }));
+
+  const weights = await loadWeights();
+  const robots = new RobotsChecker();
+  const deadline = Date.now() + budgetMs;
+  let picks: Pick[] = [];
+  for (let round = 0; ; round++) {
+    picks = selectDigest(pool, weights, DEFAULT_OPTIONS, seededRandom(date));
+    const pending = picks.filter((p) => textStatus.get(p.id) === "pendente").map((p) => byId.get(p.id)!);
+    if (pending.length === 0 || round >= MAX_ROUNDS || Date.now() >= deadline) break;
+    for (const r of await extractMany(pending, { concurrency: EXTRACT_CONCURRENCY, robots, deadline })) textStatus.set(r.id, r.status);
+    pool = pool.filter((c) => textStatus.get(c.id) === "ok" || textStatus.get(c.id) === "pendente");
+  }
+  // O que falhou ou não deu tempo de extrair fica de fora.
+  picks = picks
+    .filter((p) => textStatus.get(p.id) === "ok")
+    .sort((a, b) => CATEGORIES.indexOf(a.slot) - CATEGORIES.indexOf(b.slot));
+  if (picks.length === 0) return { date, status: "sem-conteudo", items: 0 };
+
   const items = picks.map((p, i) => ({ content_id: p.id, position: i + 1, slot: p.slot, is_exploration: p.isExploration }));
 
   // Um único comando: cria o digest, grava os itens e marca o conteúdo como entregue.
@@ -69,11 +114,15 @@ export async function buildDigest({ date = localDate(), force = false } = {}): P
   return { date, status: delivered.length > 0 ? "montado" : "ja-existia", items: delivered.length };
 }
 
-/** Conteúdo velho que nunca entrou num digest é descartado, para o banco gratuito não crescer à toa. */
+/**
+ * Conteúdo velho que nunca entrou num digest é descartado, para o banco gratuito não crescer à toa.
+ * Os populares dos blogs acompanhados ficam: são a reserva para quando o blog não publica nada.
+ */
 export async function discardStale(days = 7): Promise<number> {
   const rows = (await sql()`
     update contents set status = 'descartado'
     where status = 'classificado' and collected_at < now() - make_interval(days => ${days})
+      and source_id not in (select id from sources where type = 'popular')
     returning id`) as unknown[];
   return rows.length;
 }

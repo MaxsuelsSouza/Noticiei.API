@@ -1,5 +1,5 @@
 import { sql } from "../db.js";
-import { classify, type Topic } from "../curation/classify.js";
+import { classify, isTechnology, type Topic } from "../curation/classify.js";
 import { detectLanguage } from "../curation/language.js";
 import { canonicalUrl, titleHash } from "../text.js";
 import { fetchSource, SkippedSource } from "./fetchers.js";
@@ -42,7 +42,7 @@ function pairs(topics: string[]): [string, string][] {
 async function collectOne(source: Source, topics: Topic[], robots: RobotsChecker): Promise<SourceReport> {
   const db = sql();
   try {
-    // robots.txt vale para feeds da web; Reddit, dev.to e HN são APIs oficiais com termos próprios.
+    // robots.txt vale para feeds da web; Reddit, dev.to e HN (inclusive a busca dos populares) são APIs oficiais com termos próprios.
     if (source.type === "rss" && !(await robots.allows(source.address))) {
       await db`update sources set last_error = 'bloqueada pelo robots.txt', last_collected_at = now() where id = ${source.id}`;
       return { source: source.name, status: "bloqueada-robots" };
@@ -51,7 +51,10 @@ async function collectOne(source: Source, topics: Topic[], robots: RobotsChecker
     const raw = await fetchSource(source);
     const oldest = Date.now() - MAX_ITEM_AGE_DAYS * 86_400_000;
     const rows = raw.flatMap((item) => {
-      if (item.publishedAt && item.publishedAt.getTime() < oldest) return [];
+      // Os populares de um blog são de qualquer época: o critério ali é a pontuação, não a data.
+      if (source.type !== "popular" && item.publishedAt && item.publishedAt.getTime() < oldest) return [];
+      // Aleatório é sobre o mundo, nunca sobre tecnologia.
+      if (source.default_category === "aleatorio" && isTechnology(item, topics)) return [];
       let canonical: string;
       try {
         canonical = canonicalUrl(item.url);
@@ -121,7 +124,8 @@ export async function collectAll({ force = false } = {}): Promise<SourceReport[]
   const sources = (await db`
     -- to_jsonb: funciona mesmo antes da migração 005 criar a coluna (deploy e migração em qualquer ordem)
     select id, name, type, address, default_category, language, is_official,
-           coalesce((to_jsonb(sources) ->> 'lock_category')::boolean, false) as lock_category
+           coalesce((to_jsonb(sources) ->> 'lock_category')::boolean, false) as lock_category,
+           to_jsonb(sources) ->> 'follow_key' as follow_key
     from sources
     where active
       and (${force} or last_collected_at is null

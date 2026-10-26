@@ -29,31 +29,42 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 
 ## Como funciona a rotina diária
 
-1. **Coleta** (`src/collect`): busca as fontes ativas em paralelo (RSS/Atom, Hacker News, dev.to, Reddit).
+1. **Coleta** (`src/collect`): busca as fontes ativas em paralelo (RSS/Atom, Hacker News, dev.to, Reddit e os
+   "populares" de cada blog acompanhado).
    Feeds RSS respeitam o `robots.txt`; Reddit só pela API oficial e só se as credenciais estiverem configuradas.
-   Itens com mais de 7 dias são ignorados. Duplicados (URL canônica ou título igual) são descartados pelo banco.
-   Uma fonte com 5 falhas seguidas é desativada.
+   Itens com mais de 7 dias são ignorados (menos os populares, que valem pela pontuação). Duplicados (URL canônica ou
+   título igual) são descartados pelo banco. Uma fonte com 5 falhas seguidas é desativada. Nas fontes do Aleatório,
+   item de tecnologia é descartado já na coleta.
 2. **Curadoria** (`src/curation`): assuntos por palavras-chave (título pesa 3, resumo 1, tags da fonte valem
    como título), formato por sinais no título, idioma por trigramas (`franc`). Assuntos que aparecem juntos
    reforçam a ligação no grafo (`topic_links`).
-3. **Digest** (`src/digest`): pontuação = peso dos assuntos × 0,6 + peso do formato × 0,3 + engajamento × 0,1;
-   cotas 4 tecnologia / 4 curiosidades / 4 mundo / 1 aleatório (13 itens), no máximo 2 itens por assunto, 1 vaga de exploração.
-   O foco de cada categoria vem dos pesos de interesse semeados em
-   [005_digest_trilha.sql](db/migrations/005_digest_trilha.sql): tecnologia no estilo da trilha de estudos (fundamentos,
-   clean code e patterns, APIs, DDD, system design), curiosidades com vulnerabilidades novas e "como funciona", e mundo com
-   tecnologias que estão mudando algo (IA, chips, energia, biotech, robótica).
-   Falta de item numa categoria é completada com tecnologia. Um item nunca entra em dois digests.
+3. **Digest** (`src/digest`): pontuação = peso dos assuntos × 0,6 + peso do formato × 0,3 + engajamento × 0,1.
+   Seções, nesta ordem ([010_secoes_noticias.sql](db/migrations/010_secoes_noticias.sql)):
 
-4. **Texto completo** (`src/extract`): para os itens do digest, baixa a página do artigo (respeitando o
-   `robots.txt`) e extrai o texto principal com o Readability da Mozilla — regras sobre o HTML, sem IA e sem
-   tradução: o texto fica no idioma original. Paywall, vídeo ou página curta ficam como `falhou` e o app
-   mostra só o resumo e o link. O texto é apagado depois de 30 dias; título e link ficam.
+   | Seção | Itens | O quê |
+   |---|---|---|
+   | Tecnologia | 4 | ferramentas, linguagens, formas de codar, estruturas de dados e arquiteturas novas (precisa ter assunto de tecnologia) |
+   | HackerNews | 4 | CVEs, vulnerabilidades, ataques (DDoS, ransomware), pentest e correções |
+   | Curiosidades | 3 | "como funciona" e ciência |
+   | Mundo | 4 | tecnologias que estão mudando algo (IA, chips, energia, biotech, robótica) |
+   | Para acompanhar | 1 por blog | blogs da Trilha: o post mais recente ainda não entregue; sem novidade, o mais popular do blog no Hacker News |
+   | Aleatório | 4 | curiosidades do mundo sem tecnologia (Mental Floss, Smithsonian Smart News) |
 
-Fontes, assuntos e ligações iniciais ficam em [db/migrations/002_seed.sql](db/migrations/002_seed.sql) e
-[005_digest_trilha.sql](db/migrations/005_digest_trilha.sql). Fontes com `lock_category` nunca mudam de categoria pelo
-assunto (ex.: MIT Technology Review fica sempre em mundo). Palavras-chave que começam com `re:` são expressões regulares
-(ex.: `how <algo> works`).
-Para adicionar fontes, crie uma nova migração (`003_...sql`).
+   No máximo 2 itens por assunto e 2 da mesma fonte por seção, 1 vaga de exploração em tecnologia. Falta de item numa
+   seção é completada com tecnologia (nunca com Para acompanhar ou Aleatório). Um item nunca entra em dois digests.
+
+4. **Texto completo** (`src/extract`): baixa a página do artigo (respeitando o `robots.txt`) e extrai o texto principal
+   com o Readability da Mozilla — regras sobre o HTML, sem IA e sem tradução: o texto fica no idioma original.
+   **Só entra no digest item com texto extraído**: a montagem escolhe, extrai o texto dos escolhidos (10 em paralelo,
+   até 90 s) e troca quem falhou (paywall, vídeo, bloqueio) pelo próximo candidato, em até 10 rodadas. O sorteio usa a
+   data como semente, então de uma rodada para outra só muda o que falhou. O texto é apagado depois de 30 dias;
+   título e link ficam.
+
+Fontes, assuntos e ligações iniciais ficam em [db/migrations/002_seed.sql](db/migrations/002_seed.sql),
+[005_digest_trilha.sql](db/migrations/005_digest_trilha.sql) e [010_secoes_noticias.sql](db/migrations/010_secoes_noticias.sql).
+Fontes com `lock_category` nunca mudam de categoria pelo assunto (ex.: MIT Technology Review fica sempre em mundo).
+Palavras-chave que começam com `re:` são expressões regulares (ex.: `how <algo> works`).
+Para adicionar fontes, crie uma nova migração (`011_...sql`).
 
 ## Check-in na academia
 

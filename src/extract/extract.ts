@@ -39,7 +39,7 @@ export async function extractFromUrl(url: string, robots: RobotsChecker): Promis
   }
 }
 
-interface Pending {
+export interface Pending {
   id: string;
   url: string;
   language: string;
@@ -64,6 +64,20 @@ async function extractOne(item: Pending, robots: RobotsChecker) {
   return { id: Number(item.id), status: outcome.status };
 }
 
+/**
+ * Extrai vários itens com `concurrency` em paralelo (fila contínua: uma página lenta não segura as outras)
+ * e grava o resultado de cada um. Passado o `deadline`, não começa item novo.
+ */
+export async function extractMany(pending: Pending[], { concurrency = CONCURRENCY, robots = new RobotsChecker(), deadline = Infinity } = {}) {
+  const results: { id: number; status: string }[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < pending.length && Date.now() < deadline) results.push(await extractOne(pending[next++]!, robots));
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  return results;
+}
+
 /** Extrai o texto dos itens que já estão em algum digest e ainda não foram tentados. */
 export async function extractPendingDigestItems(limit = 16) {
   const pending = (await sql()`
@@ -72,13 +86,7 @@ export async function extractPendingDigestItems(limit = 16) {
     where c.text_status = 'pendente'
     order by c.id desc
     limit ${limit}`) as Pending[];
-
-  const robots = new RobotsChecker();
-  const results: { id: number; status: string }[] = [];
-  for (let i = 0; i < pending.length; i += CONCURRENCY) {
-    results.push(...(await Promise.all(pending.slice(i, i + CONCURRENCY).map((p) => extractOne(p, robots)))));
-  }
-  return results;
+  return extractMany(pending);
 }
 
 /** Extração sob demanda (quando o app pede um item que ainda não foi processado). */
