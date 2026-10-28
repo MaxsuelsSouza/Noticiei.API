@@ -209,6 +209,14 @@ test("runCompanion: principal não enviou → a segunda não consulta o site e r
   assert.equal(second.recorded.length, 2);
 });
 
+test("runCompanion: simulação testa a segunda mesmo sem aula para a principal (login e aulas, sem gravar)", async () => {
+  const second = harness();
+  const r = await runCompanion({ source: "app", dryRun: true }, { status: "skipped", message: "Nenhuma aula", aula: null }, second.deps(SAT_1608));
+  assert.equal(r.status, "skipped");
+  assert.equal(second.calls.list, 1);
+  assert.equal(second.recorded.length, 0);
+});
+
 test("runCompanion: simulação da principal simula a segunda, sem enviar nem gravar", async () => {
   const main = harness();
   const second = harness();

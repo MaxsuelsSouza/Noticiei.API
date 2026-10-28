@@ -94,9 +94,10 @@ export async function runCheckin({ source, dryRun = false }: Request, deps: Deps
 /**
  * Segunda conta: acompanha a principal. Só tenta quando a principal enviou (ou o site disse que já estava pedido);
  * senão registra que não foi, com o motivo da principal. Cada conta segue as próprias regras (ex.: um sucesso por dia).
+ * Simulação (dryRun) sempre roda a segunda também: confere o login e as aulas dela sem enviar nem gravar.
  */
 export async function runCompanion(request: Request, primary: Result, deps: Deps): Promise<Result> {
-  const followed = primary.status === "ok" || primary.status === "duplicate" || primary.simulated === true;
+  const followed = request.dryRun || primary.status === "ok" || primary.status === "duplicate";
   if (followed) return runCheckin(request, deps);
 
   const now = localNow(deps.now?.());
