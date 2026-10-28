@@ -18,6 +18,12 @@ export const env = {
   get borracha() {
     return { email: required("BORRACHA_EMAIL"), password: required("BORRACHA_PASSWORD") };
   },
+  /** Segunda conta (opcional): faz o check-in logo depois da principal, na mesma aula. */
+  get borracha2() {
+    const email = process.env.BORRACHA_EMAIL_2;
+    const password = process.env.BORRACHA_PASSWORD_2;
+    return email && password ? { email, password } : null;
+  },
   /** Unidade em que o aluno treina; aulas de outra unidade não são pedidas automaticamente. */
   get borrachaUnidade() {
     return process.env.BORRACHA_UNIDADE || "Espinheiro";

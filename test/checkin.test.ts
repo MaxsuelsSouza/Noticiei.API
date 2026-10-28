@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SiteError, sessionCookie, type CheckinInput, type GymSite } from "../src/checkin/borracha.js";
 import { autoAllowed, localNow, pickSlot, type Slot } from "../src/checkin/rules.js";
-import { runCheckin, type Attempt, type Store } from "../src/checkin/run.js";
+import { runCheckin, runCompanion, type Attempt, type Store } from "../src/checkin/run.js";
 
 const slot = (inicio: string, fim: string, unidade = "Espinheiro"): Slot => ({
   horario_aula: `${inicio}:00`,
@@ -175,4 +175,46 @@ test("runCheckin: mensagens enormes são cortadas", async () => {
   const h = harness({ fail: new SiteError("x".repeat(2000), "envio", 500) });
   await runCheckin({ source: "widget" }, h.deps(TUE_1945));
   assert.ok(h.recorded[0]!.message.length <= 500);
+});
+
+// ---- segunda conta: acompanha a principal ----
+
+test("runCompanion: principal enviou → a segunda envia na mesma aula", async () => {
+  const main = harness();
+  const second = harness();
+  const primary = await runCheckin({ source: "app" }, main.deps(TUE_1945));
+  const r = await runCompanion({ source: "app" }, primary, second.deps(TUE_1945));
+  assert.equal(r.status, "ok");
+  assert.equal(r.aula, primary.aula);
+  assert.equal(second.calls.request.length, 1);
+  assert.equal(second.recorded[0]!.status, "ok");
+});
+
+test("runCompanion: principal já estava pedida (duplicate) → a segunda tenta mesmo assim", async () => {
+  const second = harness();
+  const r = await runCompanion({ source: "widget" }, { status: "duplicate", message: "já solicitado", aula: "19:30–21:00 Espinheiro" }, second.deps(TUE_1945));
+  assert.equal(r.status, "ok");
+  assert.equal(second.calls.request.length, 1);
+});
+
+test("runCompanion: principal não enviou → a segunda não consulta o site e registra o motivo", async () => {
+  const second = harness();
+  for (const status of ["skipped", "error"] as const) {
+    const r = await runCompanion({ source: "auto" }, { status, message: "Nenhuma aula neste horário", aula: null }, second.deps(SAT_1608));
+    assert.equal(r.status, "skipped");
+    assert.match(r.message, /Acompanha a conta principal.*Nenhuma aula/);
+  }
+  assert.equal(second.calls.list, 0);
+  assert.equal(second.calls.request.length, 0);
+  assert.equal(second.recorded.length, 2);
+});
+
+test("runCompanion: simulação da principal simula a segunda, sem enviar nem gravar", async () => {
+  const main = harness();
+  const second = harness();
+  const primary = await runCheckin({ source: "app", dryRun: true }, main.deps(TUE_1945));
+  const r = await runCompanion({ source: "app", dryRun: true }, primary, second.deps(TUE_1945));
+  assert.equal(r.simulated, true);
+  assert.equal(second.calls.request.length, 0);
+  assert.equal(second.recorded.length, 0);
 });

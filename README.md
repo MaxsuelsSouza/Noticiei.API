@@ -23,7 +23,7 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `PATCH /api/contas/{id}` | `x-api-key` | `{ pago: true }` marca como paga e cria a próxima se for mensal/parcelada; `{ pago: false }` desfaz e apaga a próxima ainda em aberto. |
 | `DELETE /api/contas/{id}` | `x-api-key` | Remove a conta. |
 | `POST /api/checkin` | `x-api-key` | Pede o check-in no site da academia. Corpo `{ source?: app\|widget\|auto, dryRun? }`. Escolhe a aula pelo horário e registra a tentativa. `502` só em erro de verdade; sem aula, fora da regra ou já feito respondem `200` com `status: skipped`. |
-| `GET /api/checkin[?limit=50]` | `x-api-key` | Histórico das tentativas (ok, duplicate, skipped, error), com a mensagem de erro e a etapa em que falhou. |
+| `GET /api/checkin[?limit=50&conta=principal\|segunda\|todas]` | `x-api-key` | Histórico das tentativas (ok, duplicate, skipped, error), com a mensagem de erro e a etapa em que falhou. Padrão: só a conta principal. |
 | `GET /api/trilha` | `x-api-key` | Personalização da trilha de estudos (anotações, links, ajustes de material, tópicos e cursos criados) no formato do app; `updatedAt: null` = nunca gravada. |
 | `PUT /api/trilha` | `x-api-key` | Grava a personalização inteira (substitui a anterior), em tabelas `trilha_*` ([011](db/migrations/011_trilha_extras.sql)). |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
@@ -77,6 +77,10 @@ Para adicionar fontes, crie uma nova migração (`011_...sql`).
 - **Unidade:** `BORRACHA_UNIDADE` (padrão Espinheiro). Aula de outra unidade é ignorada: a confirmação "treino com outro
   professor" é do aluno e nunca é marcada por aqui.
 - **`source=auto`** (geofence do app): só ter/qui/sex, 19h–21h, e no máximo um sucesso por dia.
+- **Segunda conta** (`BORRACHA_EMAIL_2`/`BORRACHA_PASSWORD_2`, opcional): acompanha a principal. Depois do check-in da
+  principal, se ela enviou (ok ou já pedido), a segunda faz o check-in na mesma unidade e aula; se a principal não enviou,
+  a segunda só registra o motivo. A resposta do `POST` continua sendo a da principal, com a da segunda em `segunda`; cada
+  tentativa guarda a conta ([012](db/migrations/012_checkin_conta.sql)).
 - **Sem retry no envio:** repetir o pedido poderia duplicar; a falha fica no histórico para o app mostrar.
 - Código em [src/checkin](src/checkin): `rules.ts` (regras puras), `run.ts` (fluxo), `borracha.ts` (site), `store.ts` (banco).
 

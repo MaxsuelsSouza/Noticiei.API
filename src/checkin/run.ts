@@ -41,6 +41,8 @@ export interface Result {
   status: Status;
   message: string;
   aula: string | null;
+  /** Simulação (dryRun) que teria enviado. */
+  simulated?: boolean;
 }
 
 /** Texto de erro do site que indica pedido repetido. */
@@ -76,7 +78,7 @@ export async function runCheckin({ source, dryRun = false }: Request, deps: Deps
     if (slot.unidade_borracha !== deps.unidade) {
       return await finish("skipped", `A aula é de ${slot.unidade_borracha}, diferente de ${deps.unidade}. Confirme manualmente no site.`, { aula });
     }
-    if (dryRun) return await finish("skipped", `Simulação: enviaria a aula ${aula}.`, { aula });
+    if (dryRun) return { ...(await finish("skipped", `Simulação: enviaria a aula ${aula}.`, { aula })), simulated: true };
 
     await deps.site.requestCheckin({ unidade: deps.unidade, date: now.date, slot });
     return await finish("ok", `Solicitação enviada: ${aula}.`, { aula });
@@ -87,4 +89,27 @@ export async function runCheckin({ source, dryRun = false }: Request, deps: Deps
     }
     return await finish("error", `Erro inesperado: ${(error as Error).message}`);
   }
+}
+
+/**
+ * Segunda conta: acompanha a principal. Só tenta quando a principal enviou (ou o site disse que já estava pedido);
+ * senão registra que não foi, com o motivo da principal. Cada conta segue as próprias regras (ex.: um sucesso por dia).
+ */
+export async function runCompanion(request: Request, primary: Result, deps: Deps): Promise<Result> {
+  const followed = primary.status === "ok" || primary.status === "duplicate" || primary.simulated === true;
+  if (followed) return runCheckin(request, deps);
+
+  const now = localNow(deps.now?.());
+  const attempt: Attempt = {
+    source: request.source,
+    status: "skipped",
+    message: truncate(`Acompanha a conta principal, que não enviou: ${primary.message}`),
+    date: now.date,
+    aula: primary.aula,
+    unidade: deps.unidade,
+    step: null,
+    httpStatus: null,
+  };
+  if (!request.dryRun) await deps.store.record(attempt);
+  return { status: attempt.status, message: attempt.message, aula: attempt.aula };
 }
