@@ -6,16 +6,24 @@
       "schedule": "0 7 * * *"
     },
     {
-      "path": "/api/cron/once",
-      "schedule": "0 20 * * *"
-    },
-    {
       "path": "/api/cron/editais",
-      "schedule": "0 8 * * *"
+      "schedule": "0 6 * * *"
     },
     {
       "path": "/api/cron/editais-acompanhar",
-      "schedule": "0 9 * * *"
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/editais-hoje",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/cron/editais-hoje-2",
+      "schedule": "0 21 * * *"
+    },
+    {
+      "path": "/api/cron/editais-acompanhar-hoje",
+      "schedule": "0 22 * * *"
     }
   ],
   "fluid": true,
@@ -24,5 +32,11 @@
       "maxDuration": 300,
       "includeFiles": "db/migrations/**"
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/api/editais/:rota*",
+      "destination": "/api/editais?rota=:rota*"
+    }
+  ]
 }

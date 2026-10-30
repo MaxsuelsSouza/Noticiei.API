@@ -252,3 +252,26 @@ test("página provável do concurso no Gran", async () => {
     "https://blog.grancursosonline.com.br/concurso-pcpe/",
   ]);
 });
+
+test("rota única /api/editais: lê a rota do rewrite (?rota=) ou do caminho original", async () => {
+  process.env.DATABASE_URL ??= "postgres://teste@localhost/teste";
+  const { rotaDe } = await import("../api/editais.js");
+  assert.deepEqual(rotaDe(new URL("https://x/api/editais?rota=12/favorito")), ["12", "favorito"]);
+  assert.deepEqual(rotaDe(new URL("https://x/api/editais/12/interesse")), ["12", "interesse"]);
+  assert.deepEqual(rotaDe(new URL("https://x/api/editais/em-alta?uf=PE")), ["em-alta"]);
+  assert.deepEqual(rotaDe(new URL("https://x/api/editais?tipo=abertos")), []);
+});
+
+test("coleta: abre primeiro o que é de PE, depois vizinhos, BA, nacional e o resto", async () => {
+  process.env.DATABASE_URL ??= "postgres://teste@localhost/teste";
+  const { prioridade } = await import("../src/editais/collect.js");
+  const item = (titulo: string, contexto = "") => ({ url: "https://x", titulo, contexto });
+  const ordem = [
+    item("Prefeitura de Fortaleza - CE abre concurso para analista", "CE 10 vagas"),
+    item("Concurso Banco do Brasil: edital publicado"),
+    item("Sefaz - BA abre concurso", "BA"),
+    item("Prefeitura de Caruaru - PE abre concurso para analista de sistemas", "PE"),
+    item("TJ PB publica edital", "PB"),
+  ].sort((a, b) => prioridade(a) - prioridade(b)).map((i) => i.titulo.split(" ")[2]);
+  assert.deepEqual(ordem, ["Caruaru", "publica", "BA", "do", "Fortaleza"]);
+});

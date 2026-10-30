@@ -12,8 +12,8 @@ import { ehPanorama, extrair, identificarOrgao, type Extracao, type OrgaoEncontr
 import { itensDaListagem, pdfsDaPagina, valeAbrir, type ItemListagem } from "./listagem.js";
 
 const MAX_FALHAS = 5;
-const MAX_MATERIAS_POR_RODADA = 80;
-const CONCORRENCIA = 5;
+const MAX_MATERIAS_POR_RODADA = 150;
+const CONCORRENCIA = 6;
 /** A função tem 300 s; sobra margem para gravar. */
 const PRAZO_MS = 220_000;
 /** Concurso parado há mais que isso, já em andamento/encerrado: notícia nova de rumor abre outro ciclo. */
@@ -165,7 +165,10 @@ export async function coletarEditais(): Promise<RelatorioEditais> {
     if (ehPanorama(item.titulo)) return ignorar("panorama (vários concursos)"), false;
     if (!valeAbrir(item, SALARIO_MINIMO_CENTAVOS)) return ignorar("listagem já mostra fora do perfil/salário"), false;
     return true;
-  }).slice(0, MAX_MATERIAS_POR_RODADA);
+  })
+    // O limite por rodada não pode deixar Pernambuco de fora: abre primeiro o que é de PE, depois vizinhos, BA e nacional.
+    .sort(([, a], [, b]) => prioridade(a) - prioridade(b))
+    .slice(0, MAX_MATERIAS_POR_RODADA);
 
   // 3. Abre as matérias (em paralelo, até o prazo) e extrai
   const extraidas: { chave: string; item: ItemListagem & { site: string }; extracao: Extracao; publicadoEm: Date | null }[] = [];
@@ -215,6 +218,16 @@ export async function coletarEditais(): Promise<RelatorioEditais> {
   await db`delete from edital_urls_vistas where visto_em < now() - interval '60 days'`;
   relatorio.elapsedMs = Date.now() - inicio;
   return relatorio;
+}
+
+const PRIORIDADE_UF: Record<string, number> = { PE: 0, PB: 1, AL: 1, RN: 1, BA: 2, BR: 3 };
+
+/** Ordem de abertura: região (pelo órgão do título ou a UF da listagem) e, de desempate, cargo de TI citado. */
+export function prioridade(item: ItemListagem): number {
+  const uf = identificarOrgao(item.titulo, item.contexto)?.uf ?? /(?:^|\s|-|\()(PE|PB|AL|RN|BA)(?:\s|\)|$)/.exec(item.contexto)?.[1] ?? null;
+  const regiao = uf ? PRIORIDADE_UF[uf] ?? 5 : 4;
+  const ti = /\b(TI|tecnologia da informa|inform[aá]tica|sistemas|desenvolv|dados|pol[ií]cia federal|PF|PRF|ABIN|pol[ií]cia civil)\b/i.test(item.titulo) ? -0.5 : 0;
+  return regiao + ti;
 }
 
 async function registrarMencoes(itens: [string, ItemListagem & { site: string }][]) {

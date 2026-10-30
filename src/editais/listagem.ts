@@ -13,7 +13,8 @@ export interface ItemListagem {
 }
 
 const PALAVRAS_CONCURSO = /concurso|edital|selecao|inscric|vagas|banca|autoriza|previsto/;
-const MAX_ITENS = 60;
+/** A listagem do PCI por região tem centenas de concursos: lê todos (é barato); o que abre é limitado na coleta. */
+const MAX_ITENS = 600;
 
 const limpar = (t: string) => t.replace(/\s+/g, " ").trim();
 

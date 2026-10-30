@@ -32,9 +32,13 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `PUT`/`DELETE /api/editais/{id}/favorito` | `x-api-key` | Acompanhar / deixar de acompanhar o concurso. Favoritar um concurso sem edital também pede a busca do edital anterior. |
 | `POST /api/editais/{id}/interesse` | `x-api-key` | "Tenho interesse": procura o edital anterior e lê as matérias dele (até ~50 s na hora; o que faltar, o acompanhamento continua). Responde com o detalhe. |
 | `GET /api/editais/em-alta[?uf=PE&dias=7]` | `x-api-key` | Concursos mais citados: matérias nas listagens + sites diferentes + Reddit (se configurado). Inclui os fora do perfil (`perfil: false`). |
-| `GET /api/cron/editais` | `Authorization: Bearer CRON_SECRET` | Coleta dos editais (Vercel, 08:00 UTC). |
-| `GET /api/cron/editais-acompanhar` | `Authorization: Bearer CRON_SECRET` | Acompanhamento: favoritos, PDFs, edital anterior, lembretes, Reddit (Vercel, 09:00 UTC). |
+| `GET /api/cron/editais` | `Authorization: Bearer CRON_SECRET` | Coleta dos editais (Vercel, 06:00 UTC = 03:00 em Brasília). |
+| `GET /api/cron/editais-acompanhar` | `Authorization: Bearer CRON_SECRET` | Acompanhamento: favoritos, PDFs, edital anterior, lembretes, Reddit (07:00 UTC = 04:00): tudo pronto antes das 05:00. |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
+
+> **Limite de 12 funções do plano Hobby:** todos os crons ficam em [api/cron/[job].ts](api/cron/[job].ts) e todas as
+> rotas `/api/editais/*` em [api/editais.ts](api/editais.ts) (o `vercel.json` reescreve `/api/editais/<rota>` para lá).
+> Rota nova entra numa dessas, não em arquivo novo.
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
 ## Como funciona a rotina diária
@@ -78,9 +82,9 @@ Para adicionar fontes, crie uma nova migração (`011_...sql`).
 
 ## Editais (concursos)
 
-Todo dia (cron próprio, 05:00 em Brasília) lê as listagens dos sites de concurso ([013](db/migrations/013_editais.sql),
+Todo dia (cron próprio, 03:00 em Brasília) lê as listagens dos sites de concurso ([013](db/migrations/013_editais.sql),
 tabela `edital_sites`: PCI Concursos Nordeste/Nacional e o blog do Gran por estado — nenhum tem RSS útil), abre as matérias
-novas (até 80 por rodada, respeitando o `robots.txt`) e extrai por regras, sem IA ([src/editais](src/editais)):
+novas (até 150 por rodada, PE primeiro, respeitando o `robots.txt`) e extrai por regras, sem IA ([src/editais](src/editais)):
 
 - **Órgão** (`extract.ts` + `orgaos.ts`): dicionário de órgãos conhecidos, siglas com UF ("TJ PE", "Sefaz - AL"),
   "Prefeitura/Câmara de X". A unidade é o **concurso** (órgão + ciclo): várias matérias sobre o mesmo concurso viram um só,
@@ -98,7 +102,7 @@ bombeiro, polícia penal e guarda nunca. Exige bacharelado = some. Salário de 6
 **Peso** = região × 0,5 + fase × 0,3 + área × 0,2 (× 0,5 se só o final passa de 6 mil, × 0,6 se temporário). Região: PE 1;
 PB/AL/RN 0,8; BA 0,6; nacional 0,5; outros 0,2 — mas prova em Recife/capitais conta como PE.
 
-**Acompanhamento** (`acompanhar.ts`, cron das 06:00 em Brasília):
+**Acompanhamento** (`acompanhar.ts`, cron das 04:00 em Brasília):
 
 1. **Favoritos, todo dia**: reabre as matérias mais recentes do concurso (os sites atualizam a mesma página), tenta a
    página do concurso no blog do Gran (`/concurso-<sigla>/`) e, para prefeitura/câmara, o Diário Oficial do município pelo

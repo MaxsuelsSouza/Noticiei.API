@@ -10,11 +10,3 @@ export async function comTabelas<T>(run: () => Promise<T>): Promise<T> {
     return run();
   }
 }
-
-/** Id numérico de /api/editais/{id} ou /api/editais/{id}/favorito. */
-export function idDoCaminho(request: Request): number | null {
-  const partes = new URL(request.url).pathname.split("/").filter(Boolean);
-  const i = partes.indexOf("editais");
-  const id = Number(partes[i + 1]);
-  return Number.isSafeInteger(id) && id > 0 ? id : null;
-}
