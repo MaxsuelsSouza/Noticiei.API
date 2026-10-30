@@ -12,7 +12,7 @@ type Outcome =
   | { status: "ok"; article: NonNullable<ReturnType<typeof extractArticle>> }
   | { status: "falhou" | "bloqueado"; error: string };
 
-async function fetchHtml(url: string): Promise<string> {
+export async function fetchHtml(url: string): Promise<string> {
   const response = await fetch(url, {
     headers: { "user-agent": USER_AGENT, accept: "text/html,application/xhtml+xml" },
     redirect: "follow",

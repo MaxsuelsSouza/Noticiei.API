@@ -129,7 +129,7 @@ async function fetchDevTo(source: Source): Promise<RawItem[]> {
 
 let redditToken: { value: string; expiresAt: number } | null = null;
 
-async function redditAccessToken(): Promise<string> {
+export async function redditAccessToken(): Promise<string> {
   const credentials = env.reddit;
   if (!credentials) throw new SkippedSource("REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET não configurados");
   if (redditToken && redditToken.expiresAt > Date.now() + 60_000) return redditToken.value;

@@ -26,6 +26,14 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/checkin[?limit=50&conta=principal\|segunda\|todas]` | `x-api-key` | Histórico das tentativas (ok, duplicate, skipped, error), com a mensagem de erro e a etapa em que falhou. Padrão: só a conta principal. |
 | `GET /api/trilha` | `x-api-key` | Personalização da trilha de estudos (anotações, links, ajustes de material, tópicos e cursos criados) no formato do app; `updatedAt: null` = nunca gravada. |
 | `PUT /api/trilha` | `x-api-key` | Grava a personalização inteira (substitui a anterior), em tabelas `trilha_*` ([011](db/migrations/011_trilha_extras.sql)). |
+| `GET /api/editais[?tipo=ativos\|rumores\|editais\|abertos\|favoritos\|todos&uf=PE,PB&ocultos=1]` | `x-api-key` | Concursos que passam no filtro, por peso. `ocultos=1` inclui os escondidos com o motivo (diagnóstico). |
+| `GET /api/editais/hoje[?desde=ISO]` | `x-api-key` | O que mudou nas últimas 24 h (concurso novo, fase, banca, prazo, prova, edital). |
+| `GET /api/editais/{id}` | `x-api-key` | Detalhe: salário, datas, banca, vagas, regime, requisito, etapas, cidades de prova, editais (PDF), matérias e histórico. |
+| `PUT`/`DELETE /api/editais/{id}/favorito` | `x-api-key` | Acompanhar / deixar de acompanhar o concurso. Favoritar um concurso sem edital também pede a busca do edital anterior. |
+| `POST /api/editais/{id}/interesse` | `x-api-key` | "Tenho interesse": procura o edital anterior e lê as matérias dele (até ~50 s na hora; o que faltar, o acompanhamento continua). Responde com o detalhe. |
+| `GET /api/editais/em-alta[?uf=PE&dias=7]` | `x-api-key` | Concursos mais citados: matérias nas listagens + sites diferentes + Reddit (se configurado). Inclui os fora do perfil (`perfil: false`). |
+| `GET /api/cron/editais` | `Authorization: Bearer CRON_SECRET` | Coleta dos editais (Vercel, 08:00 UTC). |
+| `GET /api/cron/editais-acompanhar` | `Authorization: Bearer CRON_SECRET` | Acompanhamento: favoritos, PDFs, edital anterior, lembretes, Reddit (Vercel, 09:00 UTC). |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
@@ -67,6 +75,49 @@ Fontes, assuntos e ligações iniciais ficam em [db/migrations/002_seed.sql](db/
 Fontes com `lock_category` nunca mudam de categoria pelo assunto (ex.: MIT Technology Review fica sempre em mundo).
 Palavras-chave que começam com `re:` são expressões regulares (ex.: `how <algo> works`).
 Para adicionar fontes, crie uma nova migração (`011_...sql`).
+
+## Editais (concursos)
+
+Todo dia (cron próprio, 05:00 em Brasília) lê as listagens dos sites de concurso ([013](db/migrations/013_editais.sql),
+tabela `edital_sites`: PCI Concursos Nordeste/Nacional e o blog do Gran por estado — nenhum tem RSS útil), abre as matérias
+novas (até 80 por rodada, respeitando o `robots.txt`) e extrai por regras, sem IA ([src/editais](src/editais)):
+
+- **Órgão** (`extract.ts` + `orgaos.ts`): dicionário de órgãos conhecidos, siglas com UF ("TJ PE", "Sefaz - AL"),
+  "Prefeitura/Câmara de X". A unidade é o **concurso** (órgão + ciclo): várias matérias sobre o mesmo concurso viram um só,
+  e o resumo é recalculado a partir de todas (`avaliar.ts`). Matéria-resumo ("Concursos PE: 20 editais") é ignorada.
+- **Fase**: rumor → autorizado → comissão → banca → edital → inscrições → andamento → encerrado. Só anda para a frente.
+- **Salário**: valor perto de "salário/remuneração", sem auxílio/taxa/plantão; marca inicial × final ("após formação",
+  "podendo chegar") e se foi citado perto de cargo de TI.
+- **Datas** (fim da inscrição, isenção, prova), banca, vagas, cadastro reserva, regime, taxa, requisito (aceita tecnólogo ×
+  exige bacharelado), etapas (discursiva, TAF, psicotécnico...), restrições (idade, altura, CNH), cidades de prova e PDFs.
+
+**Quem aparece**: cargo de TI, perito de informática, ou polícia/inteligência (PF, PRF, ABIN, Polícia Civil); PM,
+bombeiro, polícia penal e guarda nunca. Exige bacharelado = some. Salário de 6 mil ou mais (inicial); só o final acima de
+6 mil = peso baixo; salário não divulgado = aparece, a menos que o maior salário do concurso fique abaixo de 6 mil.
+
+**Peso** = região × 0,5 + fase × 0,3 + área × 0,2 (× 0,5 se só o final passa de 6 mil, × 0,6 se temporário). Região: PE 1;
+PB/AL/RN 0,8; BA 0,6; nacional 0,5; outros 0,2 — mas prova em Recife/capitais conta como PE.
+
+**Acompanhamento** (`acompanhar.ts`, cron das 06:00 em Brasília):
+
+1. **Favoritos, todo dia**: reabre as matérias mais recentes do concurso (os sites atualizam a mesma página), tenta a
+   página do concurso no blog do Gran (`/concurso-<sigla>/`) e, para prefeitura/câmara, o Diário Oficial do município pelo
+   [Querido Diário](https://queridodiario.ok.org.br) (só municípios cobertos). Concursos com edital mas sem PDF lido: a cada 3 dias.
+2. **PDF do edital** (`pdf.ts`, [014](db/migrations/014_editais_acompanhamento.sql), tabela `concurso_editais`): baixa
+   (até 15 MB), tira o texto com `unpdf` e lê o período de inscrição e de isenção, a data da prova, os cargos de TI
+   (requisito: aceita tecnólogo?; salário só do cargo) e o **conteúdo programático** (gerais + TI, em matérias e assuntos).
+   O edital manda nos dados; notícia mais nova (prorrogação) ainda corrige o prazo. PDF escaneado fica `sem_texto`.
+   Antes de sair o edital, o PDF que a matéria linka é o do concurso **anterior** (não mexe em fase nem datas).
+3. **Edital anterior** ("tenho interesse" ou favoritar um rumor): ciclo anterior do mesmo órgão, PDFs das matérias do
+   rumor, página do concurso no Gran. Não achou: tenta de novo em 7 dias (favoritos e interesse).
+4. **Lembretes** dos favoritos: 7, 3, 1 e 0 dias antes de fechar a inscrição e a isenção (evento `lembrete` em `/hoje`).
+5. **Reddit** (`r/concursospublicos`, só com `REDDIT_CLIENT_ID/SECRET`): posts + comentários da semana dos 15 órgãos mais
+   citados em PE, para o "em alta". As menções das listagens começam a contar a partir do deploy (não há histórico).
+
+Diagnóstico: `GET /api/editais?tipo=todos&ocultos=1` mostra tudo, com o motivo de quem foi escondido; o relatório de cada
+rodada fica em `job_runs` (jobs `editais` e `editais-acompanhar`); o detalhe do concurso mostra cada PDF com status e erro.
+Rodar local: `npm run editais`. O teste [editais-fluxo](test/editais-fluxo.test.ts) roda o fluxo inteiro contra um
+Postgres em memória (PGlite) com sites simulados.
 
 ## Check-in na academia
 
