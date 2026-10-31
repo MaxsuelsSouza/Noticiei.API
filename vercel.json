@@ -38,5 +38,7 @@
       "source": "/api/editais/:rota*",
       "destination": "/api/editais?rota=:rota*"
     }
-  ]
+  ],
+  "buildCommand": "mkdir -p public && node --import tsx scripts/carga-no-build.ts",
+  "outputDirectory": "public"
 }
