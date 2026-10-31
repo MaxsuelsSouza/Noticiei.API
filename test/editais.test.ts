@@ -92,7 +92,7 @@ test("extrair: matéria completa de TI", () => {
   assert.equal(e.aceitaTecnologo, true);
   assert.deepEqual(e.cidadesProva.sort(), ["petrolina", "recife"]);
   assert.deepEqual(e.etapas, ["discursiva", "títulos"]);
-  assert.deepEqual(e.salarios, [{ centavos: 720000, final: false, ti: true }]);
+  assert.deepEqual(e.salarios, [{ centavos: 720000, final: false, ti: true, acessivel: true }]);
 });
 
 const base: Agregado = agregar([]);
@@ -213,7 +213,7 @@ test("edital (PDF): cargo de TI com requisito e salário só dele (o bacharelado
   ]);
   assert.equal(e.aceitaTecnologo, true);
   assert.equal(e.exigeBacharelado, false);
-  assert.deepEqual(e.salarios, [{ centavos: 785432, final: false, ti: true }]);
+  assert.deepEqual(e.salarios, [{ centavos: 785432, final: false, ti: true, acessivel: true }]);
 });
 
 test("edital (PDF): conteúdo programático em gerais + TI, sem o cargo que não é de TI", () => {
@@ -300,4 +300,34 @@ test("avaliar: fora do perfil entra em Todos/Rumores (geral) se pagar 6 mil ou m
   assert.equal(avaliar({ uf: "PE", area: "fora" }, ag({ salarios: [{ centavos: 1_200_000, final: false, ti: false }] })).visivelGeral, false);
   assert.equal(avaliar({ uf: "PE" }, ag({ salarios: [{ centavos: 500_000, final: false, ti: false }] })).visivelGeral, false);
   assert.equal(avaliar({ uf: "PE" }, ag({})).visivelGeral, false); // fora do perfil e sem salário: não aparece
+});
+
+test("lista geral: só o que você pode fazer (diploma, técnico, sem diploma); concurso só de médico/juiz sai", () => {
+  const geral = (titulo: string, texto: string) => {
+    const e = extrair({ titulo, texto, publicadoEm: ref });
+    return avaliar({ uf: "PE" }, agregar([{ publicadoEm: null, extracao: e }]));
+  };
+  // Só de médico: sai, mesmo pagando bem.
+  const medico = geral("Prefeitura de Caruaru - PE abre concurso para médicos", "Salário de R$ 15.000,00 para médico clínico geral.");
+  assert.equal(medico.visivelGeral, false);
+  assert.match(medico.motivo!, /formação específica \(medicina\)/);
+  // Juiz: sai.
+  assert.equal(geral("Concurso TJ PE: edital para juiz substituto", "Subsídio de R$ 35.877,28.").visivelGeral, false);
+  // Técnico de enfermagem e segurança do trabalho (curso técnico): fica.
+  const tecnico = geral("Hospital das Clínicas abre seleção para técnico em enfermagem e técnico em segurança do trabalho",
+    "Técnico em enfermagem: salário de R$ 6.200,00.");
+  assert.equal(tecnico.visivelGeral, true);
+  // Nível médio: fica.
+  assert.equal(geral("Concurso Banco do Brasil: edital publicado", "Escriturário de nível médio com remuneração de R$ 6.500,00.").visivelGeral, true);
+  // Qualquer superior: fica.
+  assert.equal(geral("Sefaz - AL abre concurso para auditor", "Exige nível superior em qualquer área. Remuneração de R$ 25.270,68.").visivelGeral, true);
+  // Médico e técnico juntos: vale o salário do técnico (R$ 2.500), não o "até R$ 15 mil" do médico.
+  const misto = geral("Prefeitura de Olinda - PE abre concurso para médico e técnico em enfermagem",
+    "Médico: salário de R$ 15.000,00. " + "x".repeat(300) + " Técnico em enfermagem: salário de R$ 2.500,00.");
+  assert.equal(misto.visivelGeral, false);
+  // Requisito não dito e sem formação específica: aparece, pesando menos.
+  const semReq = geral("Sefaz - BA abre concurso", "Remuneração de R$ 20.000,00.");
+  const comReq = geral("Sefaz - BA abre concurso", "Nível superior em qualquer área. Remuneração de R$ 20.000,00.");
+  assert.equal(semReq.visivelGeral, true);
+  assert.ok(semReq.pesoGeral < comReq.pesoGeral);
 });

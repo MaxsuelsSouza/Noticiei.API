@@ -24,6 +24,8 @@ export async function runAcompanhamento({ job = "editais-acompanhar" } = {}) {
     } catch {
       // segue: a coleta registra o erro de migração
     }
-    return acompanhar();
+    const relatorio = await acompanhar();
+    const { recalcularPendentes } = await import("./collect.js");
+    return { ...relatorio, recalculados: await recalcularPendentes(Date.now() + 40_000) };
   }, (r) => r);
 }

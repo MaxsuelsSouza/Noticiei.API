@@ -8,7 +8,7 @@ import { extractArticle } from "../extract/article.js";
 import { fetchHtml } from "../extract/extract.js";
 import { canonicalUrl } from "../text.js";
 import { agregar, avaliar, eventos, SALARIO_MINIMO_CENTAVOS, type Agregado, type FonteExtraida } from "./avaliar.js";
-import { ehPanorama, extrair, identificarOrgao, type Extracao, type OrgaoEncontrado } from "./extract.js";
+import { ehPanorama, extrair, identificarOrgao, nichosNoTexto, normalizar, type Extracao, type OrgaoEncontrado } from "./extract.js";
 import { itensDaListagem, pdfsDaPagina, valeAbrir, type ItemListagem } from "./listagem.js";
 
 const MAX_FALHAS = 5;
@@ -79,9 +79,11 @@ async function concursoDoOrgao(orgao: OrgaoEncontrado, extracao: Extracao) {
 /** Recalcula o resumo do concurso a partir de todas as matérias dele e registra o que mudou. */
 export async function recalcular(id: string, antes: Agregado | null) {
   const db = sql();
-  const noticias = (await db`
-    select to_char(publicado_em at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "publicadoEm", extracao, 'noticia' as tipo, url
-    from concurso_fontes where concurso_id = ${id}`) as FonteExtraida[];
+  const noticias = ((await db`
+    select to_char(publicado_em at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "publicadoEm", extracao, 'noticia' as tipo, url, titulo
+    from concurso_fontes where concurso_id = ${id}`) as (FonteExtraida & { titulo: string })[])
+    // Extração antiga (antes da 016) não tem os cargos de formação específica: tira do título, que fica guardado.
+    .map(({ titulo, ...f }) => (f.extracao.nicho ? f : { ...f, extracao: { ...f.extracao, nicho: nichosNoTexto(normalizar(titulo)) } }));
   // A tabela de PDFs vem da migração 014: antes dela, segue só com as notícias.
   const pdfs = (await db`
     select to_char(baixado_em at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "publicadoEm", extracao,
@@ -218,14 +220,7 @@ export async function coletarEditais(): Promise<RelatorioEditais> {
     relatorio.concursosAtualizados++;
   }
 
-  // Regra nova de avaliação (ex.: 015, abas Todos/Rumores): recalcula os que ainda não foram avaliados com ela.
-  const pendentes = (await db`select id::text from concursos where visivel_geral is null order by id limit 1000`.catch(() => [])) as { id: string }[];
-  for (const { id } of pendentes) {
-    if (Date.now() - inicio > PRAZO_MS + 40_000) break;
-    const [row] = (await db`select resumo from concursos where id = ${id}`) as { resumo: Agregado }[];
-    await recalcular(id, row?.resumo && Object.keys(row.resumo).length ? row.resumo : null);
-  }
-  relatorio.recalculados = pendentes.length;
+  relatorio.recalculados = await recalcularPendentes(inicio + PRAZO_MS + 40_000);
 
   await db`delete from edital_urls_vistas where visto_em < now() - interval '60 days'`;
   relatorio.elapsedMs = Date.now() - inicio;
@@ -253,6 +248,23 @@ async function registrarMencoes(itens: [string, ItemListagem & { site: string }]
     insert into edital_mencoes (url_canonica, orgao_chave, orgao_nome, uf, site, titulo)
     select c, k, n, u, s, t from jsonb_to_recordset(${JSON.stringify(linhas)}::jsonb) as x(c text, k text, n text, u text, s text, t text)
     on conflict do nothing`.catch(() => undefined); // tabela da 014
+}
+
+/**
+ * Regra nova de avaliação (migrações 015/016 zeram visivel_geral): recalcula os que ainda não foram avaliados com ela.
+ * Roda na coleta e no acompanhamento, até o prazo.
+ */
+export async function recalcularPendentes(prazo: number): Promise<number> {
+  const db = sql();
+  const pendentes = (await db`select id::text, resumo from concursos where visivel_geral is null order by peso desc, id limit 1000`.catch(() => [])) as
+    { id: string; resumo: Agregado }[];
+  let feitos = 0;
+  for (const { id, resumo } of pendentes) {
+    if (Date.now() > prazo) break;
+    await recalcular(id, resumo && Object.keys(resumo).length ? resumo : null);
+    feitos++;
+  }
+  return feitos;
 }
 
 /** Data de publicação pelas metatags comuns (article:published_time, datePublished). */

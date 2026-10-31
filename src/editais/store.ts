@@ -1,7 +1,7 @@
 /** Consultas das rotas /api/editais. */
 import { sql } from "../db.js";
 import { TIME_ZONE } from "../time.js";
-import { NOME_FASE, type Agregado } from "./avaliar.js";
+import { acessoDe, NOME_FASE, type Agregado } from "./avaliar.js";
 import type { Fase } from "./extract.js";
 
 export const TIPOS = ["ativos", "rumores", "editais", "abertos", "favoritos", "todos"] as const;
@@ -75,6 +75,8 @@ function cartao(l: Linha) {
     duracao: r.regime === "temporario" ? r.duracao ?? null : null,
     aceitaTecnologo: r.aceitaTecnologo ?? null,
     nivelMedio: r.nivelMedio ?? false,
+    /** Por onde você entra: tecnologo | qualquer_superior | tecnico | medio | null (requisito não identificado). */
+    acesso: r.temTi === undefined ? null : acessoDe({ ...r, nivelTecnico: r.nivelTecnico ?? false, qualquerSuperior: r.qualquerSuperior ?? false }),
     edital: r.editais?.[0] ?? null,
     favorito: l.favorito,
     peso: l.visivel ? l.peso : l.peso_geral,

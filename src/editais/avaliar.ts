@@ -27,6 +27,10 @@ export interface Agregado {
   aceitaTecnologo: boolean | null;
   exigeBacharelado: boolean;
   nivelMedio: boolean;
+  nivelTecnico: boolean;
+  qualquerSuperior: boolean;
+  /** Formações específicas citadas nos títulos (médico, juiz…). */
+  nicho: string[];
   etapas: string[];
   restricoes: string[];
   cidadesProva: string[];
@@ -94,6 +98,9 @@ export function agregar(entrada: FonteExtraida[]): Agregado {
     aceitaTecnologo: aceita,
     exigeBacharelado: aceita !== true && baseRequisito.some((e) => e.exigeBacharelado),
     nivelMedio: algum((e) => e.nivelMedio),
+    nivelTecnico: algum((e) => Boolean(e.nivelTecnico)),
+    qualquerSuperior: algum((e) => Boolean(e.qualquerSuperior)),
+    nicho: uniao(es.map((e) => e.nicho ?? [])),
     etapas: uniao(es.map((e) => e.etapas)),
     restricoes: uniao(es.map((e) => e.restricoes)),
     cidadesProva: uniao(es.map((e) => e.cidadesProva)),
@@ -108,6 +115,17 @@ export function agregar(entrada: FonteExtraida[]): Agregado {
 
 export type Area = "ti" | "policia_ti" | "policia";
 export type SituacaoSalario = "ok" | "so_final" | "desconhecido";
+
+/** Por onde você entra num concurso fora do perfil (o mais forte primeiro). */
+export type Acesso = "tecnologo" | "qualquer_superior" | "tecnico" | "medio";
+
+export function acessoDe(ag: Pick<Agregado, "aceitaTecnologo" | "qualquerSuperior" | "nivelTecnico" | "nivelMedio" | "temTi">): Acesso | null {
+  if (ag.aceitaTecnologo === true || ag.temTi) return "tecnologo";
+  if (ag.qualquerSuperior) return "qualquer_superior";
+  if (ag.nivelTecnico) return "tecnico";
+  if (ag.nivelMedio) return "medio";
+  return null;
+}
 
 export interface Avaliacao {
   /** Aparece no seu perfil (TI e polícia/inteligência): Editais, Inscrições abertas, Favoritos, widget, avisos. */
@@ -154,13 +172,23 @@ export function avaliar(orgao: OrgaoBase, ag: Agregado): Avaliacao {
   // Fora do perfil: entra em Todos/Rumores se pagar 6 mil ou mais (salário conhecido), de qualquer área.
   // PM, bombeiro, polícia penal e guarda continuam fora.
   if (orgao.area === "fora") return { ...perfil, visivelGeral: false, pesoGeral: 0 };
-  const inicial = maior(ag.salarios.filter((s) => !s.final).map((s) => s.centavos));
-  const final = maior(ag.salarios.filter((s) => s.final).map((s) => s.centavos));
+  // Só o que você pode fazer: seu diploma (TI/tecnólogo ou qualquer superior), curso técnico, ou sem diploma (médio).
+  // Concurso só de cargo com formação específica (médico, juiz, engenheiro…) fica fora.
+  const acesso = acessoDe(ag);
+  if (ag.nicho.length && !acesso) {
+    return { ...perfil, motivo: `só cargos com formação específica (${ag.nicho.join(", ")})`, visivelGeral: false, pesoGeral: 0 };
+  }
+  // Com cargo de formação específica no meio, vale o salário citado perto do cargo que você pode fazer
+  // (senão o "até R$ 15 mil" do médico seguraria um concurso cuja vaga de técnico paga R$ 2.500).
+  const salarios = ag.nicho.length ? ag.salarios.filter((s) => s.acessivel) : ag.salarios;
+  const inicial = maior(salarios.filter((s) => !s.final).map((s) => s.centavos));
+  const final = maior(salarios.filter((s) => s.final).map((s) => s.centavos));
   const situacao: SituacaoSalario | null = inicial !== null && inicial >= SALARIO_MINIMO_CENTAVOS ? "ok"
     : final !== null && final >= SALARIO_MINIMO_CENTAVOS ? "so_final" : null;
   if (!situacao) return { ...perfil, visivelGeral: false, pesoGeral: 0 };
   const base = pesoRegiao(orgao, ag) * 0.5 + PESO_FASE[ag.fase] * 0.3 + PESO_AREA_OUTRA * 0.2;
-  const fator = (situacao === "so_final" ? 0.5 : 1) * (ag.regime === "temporario" ? 0.6 : 1);
+  // Requisito não identificado na matéria: aparece, mas abaixo dos que deixam claro que você pode fazer.
+  const fator = (situacao === "so_final" ? 0.5 : 1) * (ag.regime === "temporario" ? 0.6 : 1) * (acesso ? 1 : 0.7);
   return {
     ...perfil,
     // Sem o salário do cargo de TI, o cartão mostra o salário do concurso.

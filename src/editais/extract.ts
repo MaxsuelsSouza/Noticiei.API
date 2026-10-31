@@ -58,6 +58,37 @@ export interface Salario {
   final: boolean;
   /** Citado perto de um cargo de TI. */
   ti: boolean;
+  /** Citado perto de um cargo que você pode fazer (TI, qualquer superior, técnico, médio, fundamental). */
+  acessivel?: boolean;
+}
+
+/** Cargos que você pode fazer sem formação específica: nível médio/fundamental, curso técnico, qualquer superior. */
+const ACESSIVEL = /\b(nivel medio|ensino medio|nivel fundamental|ensino fundamental|nivel tecnico|curso tecnico|tecnicos? (?:em|de) [a-z]{4,}|qualquer (?:area|curso|graduacao|formacao)|nivel superior em qualquer|qualquer curso superior|tecnologos?)\b/g;
+
+/**
+ * Cargos que exigem formação ou registro profissional específico (Medicina, Direito, Engenharia, licenciatura…).
+ * "Técnico em enfermagem" não entra: só "enfermeiro".
+ */
+const NICHO: [string, RegExp][] = [
+  ["medicina", /\bmedic[oa]s?\b(?! veterinari)|\bmedicina\b|residencia medica/],
+  ["enfermagem (superior)", /\benfermeir[oa]s?\b/],
+  ["odontologia", /\bdentistas?\b|\bodontolog/],
+  ["farmácia", /\bfarmaceutic[oa]s?\b/],
+  ["fisioterapia", /\bfisioterapeutas?\b/],
+  ["psicologia", /\bpsicolog[oa]s?\b/],
+  ["nutrição", /\bnutricionistas?\b/],
+  ["veterinária", /\bveterinari[oa]s?\b|medic[oa]s? veterinari/],
+  ["Direito", /\bjuiz(es|a)?\b|\bmagistratura\b|\bpromotor(es|a)?\b|\bprocurador(es|a)?\b|\bdefensor(es|a)?\b|\bdelegad[oa]s?\b|\badvogad[oa]s?\b|\bcartorio\b|\btabeliao\b/],
+  ["engenharia", /\bengenheir[oa]s?\b/],
+  ["arquitetura", /\barquitet[oa]s?\b/],
+  ["contabilidade", /\bcontador(es|a)?\b/],
+  ["licenciatura", /\bprofessor(es|a|as)?\b|\bdocentes?\b|\bpedagog[oa]s?\b/],
+];
+
+export const nichosNoTexto = (n: string) => NICHO.filter(([, r]) => r.test(n)).map(([nome]) => nome);
+
+export function posicoesAcessivel(n: string): number[] {
+  return [...n.replace(INFORMATICA_BASICA, (m) => " ".repeat(m.length)).matchAll(ACESSIVEL)].map((m) => m.index!);
 }
 
 const DINHEIRO = /r\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?)(\s*mil\b)?/g;
@@ -86,6 +117,14 @@ const DISTANCIA_TI = 160;
 
 export function extrairSalarios(n: string, todoTi = false): Salario[] {
   const ti = posicoesTi(n);
+  const acessiveis = [...ti, ...posicoesAcessivel(n)];
+  const nichos = NICHO.flatMap(([, r]) => [...n.matchAll(new RegExp(r.source, "g"))].map((m) => m.index!));
+  // Vale o cargo citado mais perto do valor: "Médico: R$ 15 mil … Técnico: R$ 2.500" não mistura os dois.
+  const pertoDeAcessivel = (pos: number) => {
+    const dist = (lista: number[]) => Math.min(Infinity, ...lista.map((p) => Math.abs(p - pos)));
+    const a = dist(acessiveis);
+    return a <= DISTANCIA_TI && a <= dist(nichos);
+  };
   const salarios: Salario[] = [];
   for (const m of n.matchAll(DINHEIRO)) {
     const inicio = m.index!;
@@ -104,6 +143,7 @@ export function extrairSalarios(n: string, todoTi = false): Salario[] {
       centavos,
       final: PALAVRA_FINAL_ANTES.test(antes) || PALAVRA_FINAL_DEPOIS.test(depois),
       ti: todoTi || ti.some((p) => Math.abs(p - inicio) <= DISTANCIA_TI),
+      acessivel: todoTi || pertoDeAcessivel(inicio),
     });
   }
   return salarios;
@@ -363,7 +403,14 @@ export interface Extracao {
   policiaGeral: boolean;
   aceitaTecnologo: boolean | null;
   exigeBacharelado: boolean;
+  /** Nível médio ou fundamental (não pede diploma). */
   nivelMedio: boolean;
+  /** Curso técnico (técnico em enfermagem, segurança do trabalho…). */
+  nivelTecnico?: boolean;
+  /** Aceita qualquer graduação. */
+  qualquerSuperior?: boolean;
+  /** Formações específicas citadas no título (concurso de médico, juiz…). */
+  nicho?: string[];
   etapas: string[];
   restricoes: string[];
   cidadesProva: string[];
@@ -425,7 +472,10 @@ export function extrair(materia: Materia): Extracao {
     policiaGeral: orgao?.area === "policia" || POLICIA_GERAL.test(normalizar(materia.titulo)),
     aceitaTecnologo: tecnologo ? true : bacharel ? false : null,
     exigeBacharelado: bacharel && !tecnologo,
-    nivelMedio: /nivel medio|ensino medio|nivel tecnico/.test(n),
+    nivelMedio: /nivel medio|ensino medio|nivel fundamental|ensino fundamental|nao (?:e )?exige (?:diploma|formacao)/.test(n),
+    nivelTecnico: /nivel tecnico|curso tecnico|\btecnicos? (?:em|de) (?!informatica basica)[a-z]{4,}/.test(n),
+    qualquerSuperior: /qualquer (?:area|curso|graduacao|formacao)|nivel superior em qualquer|qualquer curso superior/.test(n),
+    nicho: nichosNoTexto(normalizar(materia.titulo)),
     etapas: ETAPAS.filter(([, r]) => r.test(n)).map(([nome]) => nome),
     restricoes: RESTRICOES.filter(([, r]) => r.test(n)).map(([nome]) => nome),
     cidadesProva: cidades,
