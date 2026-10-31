@@ -1,4 +1,5 @@
 import { buscarAnterior } from "../src/editais/acompanhar.js";
+import { runAcompanhamento, runEditais } from "../src/editais/run.js";
 import { comTabelas } from "../src/editais/http.js";
 import { detalhe, emAlta, favoritar, listar, marcarInteresse, novidades, TIPOS, type Tipo } from "../src/editais/store.js";
 import { isApp, json, unauthorized } from "../src/http.js";
@@ -7,13 +8,14 @@ import { isApp, json, unauthorized } from "../src/http.js";
  * Todas as rotas /api/editais/* numa função só (o plano Hobby da Vercel aceita no máximo 12 funções por deploy).
  * O vercel.json reescreve /api/editais/<rota> para cá com ?rota=<rota>:
  *
- *   GET    /api/editais[?tipo=&uf=&ocultos=1]   lista por peso
+ *   GET    /api/editais[?tipo=&escopo=&uf=&ocultos=1]   lista por peso (escopo=geral: qualquer área com R$ 6 mil+)
  *   GET    /api/editais/hoje[?desde=ISO]        o que mudou (padrão: 24 h)
  *   GET    /api/editais/em-alta[?uf=PE&dias=7]  mais citados
  *   GET    /api/editais/{id}                    detalhe
  *   PUT    /api/editais/{id}/favorito           acompanhar (num rumor, também pede o edital anterior)
  *   DELETE /api/editais/{id}/favorito           deixar de acompanhar
  *   POST   /api/editais/{id}/interesse          procura o edital anterior (até ~50 s) e devolve o detalhe
+ *   POST   /api/editais/atualizar?etapa=coleta|acompanhar   roda a rotina agora (cada etapa cabe nos 300 s da função)
  */
 const PRAZO_INTERESSE_MS = 50_000;
 
@@ -38,8 +40,9 @@ async function handle(request: Request): Promise<Response> {
     if (metodo !== "GET") return json({ error: "método não permitido" }, 405);
     const tipo = (params.get("tipo") ?? "ativos") as Tipo;
     if (!TIPOS.includes(tipo)) return json({ error: `tipo deve ser um de: ${TIPOS.join(", ")}` }, 400);
-    const concursos = await comTabelas(() => listar({ tipo, ufs: ufsDe(params.get("uf")), ocultos: params.get("ocultos") === "1" }));
-    return json({ tipo, total: concursos.length, concursos });
+    const escopo = params.get("escopo") === "geral" ? "geral" : "perfil";
+    const concursos = await comTabelas(() => listar({ tipo, escopo, ufs: ufsDe(params.get("uf")), ocultos: params.get("ocultos") === "1" }));
+    return json({ tipo, escopo, total: concursos.length, concursos });
   }
 
   if (primeiro === "hoje" && !acao && metodo === "GET") {
@@ -53,6 +56,13 @@ async function handle(request: Request): Promise<Response> {
     const ufs = ufsDe(params.get("uf"), "PE");
     const dias = Math.min(30, Math.max(1, Number(params.get("dias") ?? 7) || 7));
     return json({ ufs, dias, ranking: await comTabelas(() => emAlta(ufs, dias)) });
+  }
+
+  if (primeiro === "atualizar" && !acao && metodo === "POST") {
+    const etapa = params.get("etapa") ?? "coleta";
+    if (etapa === "coleta") return json(await runEditais({ job: "editais-manual" }));
+    if (etapa === "acompanhar") return json(await runAcompanhamento({ job: "editais-acompanhar-manual" }));
+    return json({ error: "etapa deve ser coleta ou acompanhar" }, 400);
   }
 
   const id = Number(primeiro);

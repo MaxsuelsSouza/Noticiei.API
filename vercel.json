@@ -15,15 +15,15 @@
     },
     {
       "path": "/api/cron/editais-hoje",
-      "schedule": "0 20 * * *"
+      "schedule": "0 13 * * *"
     },
     {
       "path": "/api/cron/editais-hoje-2",
-      "schedule": "0 21 * * *"
+      "schedule": "0 14 * * *"
     },
     {
       "path": "/api/cron/editais-acompanhar-hoje",
-      "schedule": "0 22 * * *"
+      "schedule": "0 15 * * *"
     }
   ],
   "fluid": true,

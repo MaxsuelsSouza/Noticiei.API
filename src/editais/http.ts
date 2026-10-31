@@ -1,11 +1,12 @@
 import { migrate } from "../migrate.js";
 
-/** As tabelas vêm da migração 013, que roda com a rotina; se o app chegar antes, aplica na hora. */
+/** Tabelas e colunas vêm das migrações, que rodam com a rotina; se o app chegar antes, aplica na hora. */
 export async function comTabelas<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    if ((error as { code?: string }).code !== "42P01") throw error;
+    // 42P01: tabela não existe; 42703: coluna não existe (migração nova ainda não rodou).
+    if (!["42P01", "42703"].includes((error as { code?: string }).code ?? "")) throw error;
     await migrate();
     return run();
   }

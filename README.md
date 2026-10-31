@@ -26,10 +26,11 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/checkin[?limit=50&conta=principal\|segunda\|todas]` | `x-api-key` | Histórico das tentativas (ok, duplicate, skipped, error), com a mensagem de erro e a etapa em que falhou. Padrão: só a conta principal. |
 | `GET /api/trilha` | `x-api-key` | Personalização da trilha de estudos (anotações, links, ajustes de material, tópicos e cursos criados) no formato do app; `updatedAt: null` = nunca gravada. |
 | `PUT /api/trilha` | `x-api-key` | Grava a personalização inteira (substitui a anterior), em tabelas `trilha_*` ([011](db/migrations/011_trilha_extras.sql)). |
-| `GET /api/editais[?tipo=ativos\|rumores\|editais\|abertos\|favoritos\|todos&uf=PE,PB&ocultos=1]` | `x-api-key` | Concursos que passam no filtro, por peso. `ocultos=1` inclui os escondidos com o motivo (diagnóstico). |
+| `GET /api/editais[?tipo=ativos\|rumores\|editais\|abertos\|favoritos\|todos&escopo=geral&uf=PE,PB&ocultos=1]` | `x-api-key` | Concursos que passam no filtro, por peso. `escopo=geral` (abas Todos e Rumores): qualquer área com salário de R$ 6 mil+ (`perfil: false` = fora de TI/polícia). `ocultos=1` inclui os escondidos com o motivo. Temporário traz `duracao` do contrato. |
 | `GET /api/editais/hoje[?desde=ISO]` | `x-api-key` | O que mudou nas últimas 24 h (concurso novo, fase, banca, prazo, prova, edital). |
 | `GET /api/editais/{id}` | `x-api-key` | Detalhe: salário, datas, banca, vagas, regime, requisito, etapas, cidades de prova, editais (PDF), matérias e histórico. |
 | `PUT`/`DELETE /api/editais/{id}/favorito` | `x-api-key` | Acompanhar / deixar de acompanhar o concurso. Favoritar um concurso sem edital também pede a busca do edital anterior. |
+| `POST /api/editais/atualizar?etapa=coleta\|acompanhar` | `x-api-key` | Roda a rotina dos editais agora (coleta, depois acompanhamento: cada uma cabe nos 300 s). |
 | `POST /api/editais/{id}/interesse` | `x-api-key` | "Tenho interesse": procura o edital anterior e lê as matérias dele (até ~50 s na hora; o que faltar, o acompanhamento continua). Responde com o detalhe. |
 | `GET /api/editais/em-alta[?uf=PE&dias=7]` | `x-api-key` | Concursos mais citados: matérias nas listagens + sites diferentes + Reddit (se configurado). Inclui os fora do perfil (`perfil: false`). |
 | `GET /api/cron/editais` | `Authorization: Bearer CRON_SECRET` | Coleta dos editais (Vercel, 06:00 UTC = 03:00 em Brasília). |

@@ -48,6 +48,8 @@ const SITES: Record<string, { tipo: string; corpo: string | Buffer }> = {
     <div class="ca"><a href="/noticias/trt-pe-abre-concurso-ti">TRT PE abre concurso para Analista Judiciário de TI</a><div>PE</div><div>30 vagas até R$ 16.000,00</div></div>
     <div class="ca"><a href="/noticias/prefeitura-de-rio-real-ba-retifica-editais">Prefeitura de Rio Real - BA retifica editais de concursos</a><div>BA</div><div>148 vagas até R$ 4.430,06</div></div>
     <div class="ca"><a href="/noticias/pm-pe-concurso">Polícia Militar de Pernambuco abre concurso para soldado</a><div>PE</div></div>
+    <div class="ca"><a href="/noticias/sefaz-al-auditor">Sefaz - AL abre concurso público com vagas para o cargo de Auditor Fiscal</a><div>AL</div><div>40 vagas até R$ 25.270,68</div></div>
+    <div class="ca"><a href="/noticias/emprel-temporario-ti">Emprel abre seleção temporária para Analista de TI no Recife - PE</a><div>PE</div><div>10 vagas até R$ 6.500,00</div></div>
   </body></html>` },
   [`${PCI}/noticias/trt-pe-abre-concurso-ti`]: { tipo: "text/html", corpo: pagina(
     "TRT PE abre concurso para Analista Judiciário de TI",
@@ -57,6 +59,18 @@ const SITES: Record<string, { tipo: string; corpo: string | Buffer }> = {
       `As inscrições vão até ${dia(3)}. A prova objetiva será em ${dia(40)}, em Recife.`,
     ),
     `<a href="${PCI}/arquivos/edital-trt6-ti.pdf">Edital</a>`,
+  ) },
+  [`${PCI}/noticias/sefaz-al-auditor`]: { tipo: "text/html", corpo: pagina(
+    "Sefaz - AL abre concurso público com vagas para o cargo de Auditor Fiscal",
+    paragrafos("A Secretaria da Fazenda de Alagoas abriu 40 vagas para Auditor Fiscal, com remuneração de R$ 25.270,68.", `Inscrições até ${dia(10)}.`),
+  ) },
+  [`${PCI}/noticias/emprel-temporario-ti`]: { tipo: "text/html", corpo: pagina(
+    "Emprel abre seleção temporária para Analista de TI no Recife - PE",
+    paragrafos(
+      "A Emprel, empresa de tecnologia da informação do Recife, abriu processo seletivo simplificado para Analista de Sistemas.",
+      "O salário de analista de tecnologia da informação é de R$ 6.500,00. O contrato terá duração de 12 meses, prorrogável por igual período.",
+      `Inscrições até ${dia(4)}.`,
+    ),
   ) },
   [`${PCI}/arquivos/edital-trt6-ti.pdf`]: { tipo: "application/pdf", corpo: pdf([
     "EDITAL N 1 - TRT DA 6 REGIAO",
@@ -112,7 +126,7 @@ test.after(() => void (globalThis.fetch = fetchOriginal));
 
 test("coleta: cria os concursos certos, ignora o que está fora do perfil e enfileira os PDFs", async () => {
   const r = await coletarEditais();
-  assert.equal(r.concursosNovos, 2);
+  assert.equal(r.concursosNovos, 4);
   assert.ok(r.ignoradas["listagem já mostra fora do perfil/salário"]! >= 2); // Rio Real (salário) e PM
   assert.equal(r.ignoradas["panorama (vários concursos)"], 1);
 
@@ -129,7 +143,21 @@ test("coleta: cria os concursos certos, ignora o que está fora do perfil e enfi
   const fila = (await sql`select tipo, status from concurso_editais order by tipo`) as { tipo: string; status: string }[];
   assert.deepEqual(fila, [{ tipo: "anterior", status: "pendente" }, { tipo: "atual", status: "pendente" }]);
   const abertos = await listar({ tipo: "abertos", ufs: ["PE"], ocultos: false });
-  assert.deepEqual(abertos.map((c) => c.orgao), ["TRT PE"]);
+  assert.deepEqual(abertos.map((c) => c.orgao).sort(), ["Emprel", "TRT PE"]);
+
+  // Temporário vem com a duração do contrato.
+  const emprel = lista.find((c) => c.orgao === "Emprel")!;
+  assert.equal(emprel.regime, "temporario");
+  assert.deepEqual(emprel.duracao, { meses: 12, prorrogavel: true, ateMeses: 24 });
+
+  // Auditor fiscal (fora de TI): não está no perfil, mas aparece no escopo geral (Todos/Rumores), depois dos de TI de PE.
+  assert.equal(lista.some((c) => c.orgao === "Sefaz AL"), false);
+  const geral = await listar({ tipo: "ativos", escopo: "geral", ufs: [], ocultos: false });
+  const sefaz = geral.find((c) => c.orgao === "Sefaz AL")!;
+  assert.equal(sefaz.perfil, false);
+  assert.equal(sefaz.salario.inicialCentavos, 2_527_068);
+  assert.ok(geral.findIndex((c) => c.orgao === "TRT PE") < geral.indexOf(sefaz));
+  assert.ok(geral.every((c) => !/Militar/.test(c.orgao)));
 });
 
 test("favoritar rumor pede o edital anterior; acompanhamento lê PDFs e avisa o prazo", async () => {

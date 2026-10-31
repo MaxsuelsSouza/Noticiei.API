@@ -9,6 +9,8 @@ export type Tipo = (typeof TIPOS)[number];
 
 export interface Filtro {
   tipo: Tipo;
+  /** "perfil" (padrão): TI e polícia/inteligência. "geral": qualquer área que pague R$ 6 mil ou mais (abas Todos e Rumores). */
+  escopo?: "perfil" | "geral";
   ufs: string[];
   /** Diagnóstico: inclui os que o filtro escondeu, com o motivo. */
   ocultos: boolean;
@@ -23,6 +25,8 @@ interface Linha {
   fase: Fase;
   area: string | null;
   visivel: boolean;
+  visivel_geral: boolean | null;
+  peso_geral: number;
   motivo_oculto: string | null;
   situacao_salario: string | null;
   salario_inicial_centavos: number | null;
@@ -39,7 +43,9 @@ interface Linha {
 }
 
 const colunas = () => sql()`
-  c.id::text, c.orgao_nome, c.orgao_chave, c.uf, c.esfera, c.fase, c.area, c.visivel, c.motivo_oculto, c.situacao_salario,
+  c.id::text, c.orgao_nome, c.orgao_chave, c.uf, c.esfera, c.fase, c.area, c.visivel,
+  coalesce(c.visivel_geral, c.visivel) as visivel_geral, case when c.visivel_geral is null then c.peso else c.peso_geral end as peso_geral,
+  c.motivo_oculto, c.situacao_salario,
   c.salario_inicial_centavos, c.salario_final_centavos, c.peso, to_char(c.inscricoes_ate, 'YYYY-MM-DD') as inscricoes_ate,
   to_char(c.prova_em, 'YYYY-MM-DD') as prova_em,
   c.inscricoes_ate - (now() at time zone ${TIME_ZONE})::date as dias_inscricao,
@@ -65,21 +71,26 @@ function cartao(l: Linha) {
     vagas: r.vagas ?? null,
     cadastroReserva: r.cadastroReserva ?? false,
     regime: r.regime ?? null,
+    /** Só para temporário: duração do contrato (meses) e se é prorrogável. */
+    duracao: r.regime === "temporario" ? r.duracao ?? null : null,
     aceitaTecnologo: r.aceitaTecnologo ?? null,
     nivelMedio: r.nivelMedio ?? false,
     edital: r.editais?.[0] ?? null,
     favorito: l.favorito,
-    peso: l.peso,
+    peso: l.visivel ? l.peso : l.peso_geral,
+    /** Está no seu perfil (TI e polícia/inteligência). false = só aparece em escopo geral ("outra área"). */
+    perfil: l.visivel,
     mudouEm: new Date(l.mudou_em).toISOString(),
-    ...(l.visivel ? {} : { oculto: l.motivo_oculto }),
+    ...(l.visivel || l.visivel_geral ? {} : { oculto: l.motivo_oculto }),
   };
 }
 
 export async function listar(filtro: Filtro) {
   const db = sql();
+  const geral = filtro.escopo === "geral";
   const rows = (await db`
     select ${colunas()} from concursos c
-    where (${filtro.ocultos} or c.visivel)
+    where (${filtro.ocultos} or case when ${geral} then coalesce(c.visivel_geral, c.visivel) else c.visivel end)
       and (cardinality(${filtro.ufs}::text[]) = 0 or c.uf = any(${filtro.ufs}::text[]))
       and case ${filtro.tipo}
         when 'todos' then true
@@ -91,7 +102,8 @@ export async function listar(filtro: Filtro) {
         else c.fase not in ('andamento', 'encerrado')
              and not (c.inscricoes_ate is not null and c.inscricoes_ate < (now() at time zone ${TIME_ZONE})::date and c.fase in ('edital', 'inscricoes'))
       end
-    order by c.visivel desc, c.peso desc, c.mudou_em desc
+    order by case when ${geral} then coalesce(c.visivel_geral, c.visivel) else c.visivel end desc,
+             case when ${geral} and c.visivel_geral is not null then c.peso_geral else c.peso end desc, c.mudou_em desc
     limit 200`) as Linha[];
   return rows.map(cartao);
 }

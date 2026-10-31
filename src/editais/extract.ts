@@ -269,6 +269,16 @@ export function identificarOrgao(titulo: string, texto: string): OrgaoEncontrado
       return { chave: slug(nomeN), nome: original, uf, esfera: null, origem: "padrao" };
     }
   }
+
+  // "Emprel abre seleção…", "Detran Paraíba publica edital…" (formato comum no PCI): o nome vem antes do verbo.
+  const verbo = /^(.{2,50}?)(?:\s*[-–]\s*(\w\w))?\s+(?:abre|abrem|publica|divulga|retifica|prorroga|lanca|anuncia|oferece|realiza|homologa|suspende|reabre|convoca)\b/.exec(n);
+  if (verbo && /[a-z]{3}/.test(verbo[1]!) && !/^(o|a|os|as|governo|concurso|edital|selecao|processo)\b/.test(verbo[1]!.trim())) {
+    const nomeN = verbo[1]!.trim();
+    const original = titulo.slice(0, nomeN.length).trim();
+    const ufTitulo = verbo[2] && SIGLAS_UF.includes(verbo[2]) ? verbo[2].toUpperCase() : null;
+    const uf = ufTitulo ?? /\s[-–(]\s?(\w\w)\)?\s*$/.exec(n)?.[1]?.toUpperCase() ?? ufNoTexto(`${n} ${corpo}`);
+    return { chave: slug(`${nomeN}${uf ? ` ${uf}` : ""}`), nome: original, uf: uf && UFS[uf] ? uf : null, esfera: null, origem: "padrao" };
+  }
   return null;
 }
 
@@ -292,6 +302,46 @@ const RESTRICOES: [string, RegExp][] = [
   ["altura mínima", /altura minima/],
   ["CNH", /\bcnh\b|carteira nacional de habilitacao/],
 ];
+const NUMEROS: Record<string, number> = {
+  um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10,
+  onze: 11, doze: 12, dezoito: 18, "vinte e quatro": 24, trinta: 30, "trinta e seis": 36,
+};
+const QUANTIDADE = "(\\d{1,2}|vinte e quatro|trinta e seis|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|dezoito|trinta)";
+const DURACAO = new RegExp(
+  `(?:contrat\\w*|vigencia|duracao|prazo d[ea] (?:contrato|contratacao|vigencia)|temporari\\w*)[^.;]{0,70}?\\b(?:de|ate|por|em)\\s+(?:ate\\s+)?${QUANTIDADE}\\s*(?:\\(\\w+\\)\\s*)?(meses|mes|anos?)\\b([^.;]{0,90})`,
+);
+
+export interface Duracao {
+  meses: number;
+  prorrogavel: boolean;
+  /** Até quantos meses no total, se o texto disser ("prorrogável por igual período" = o dobro). */
+  ateMeses: number | null;
+}
+
+const emMeses = (quantidade: string, unidade: string) => (NUMEROS[quantidade] ?? Number(quantidade)) * (/ano/.test(unidade) ? 12 : 1);
+
+/**
+ * Duração do contrato temporário ("contrato de 12 meses, prorrogável por igual período"). Ignora a validade do
+ * concurso ("validade de 2 anos"), que é outra coisa.
+ */
+export function duracaoTemporario(n: string): Duracao | null {
+  for (const frase of n.split(/\.\s|;\s|\n/)) {
+    if (/validade/.test(frase) && !/contrat/.test(frase)) continue;
+    const m = DURACAO.exec(frase);
+    if (!m) continue;
+    const antes = frase.slice(0, m.index + m[0].length - m[3]!.length);
+    if (/validade[^.]{0,40}$/.test(antes)) continue;
+    const meses = emMeses(m[1]!, m[2]!);
+    if (!meses || meses > 72) continue;
+    const resto = m[3] ?? "";
+    const prorrogavel = /prorrog/.test(resto);
+    const ate = new RegExp(`(?:ate|por mais|por)\\s+(?:ate\\s+)?${QUANTIDADE}\\s*(meses|mes|anos?)`).exec(resto.slice(resto.search(/prorrog/) + 1 || 0));
+    const ateMeses = !prorrogavel ? null : /igual periodo/.test(resto) ? meses * 2 : ate ? meses + emMeses(ate[1]!, ate[2]!) : null;
+    return { meses, prorrogavel, ateMeses };
+  }
+  return null;
+}
+
 const CLT_ORGAOS = new Set(["bb", "caixa", "bnb", "serpro", "dataprev", "petrobras", "correios", "bndes", "compesa"]);
 
 export interface Extracao {
@@ -301,6 +351,8 @@ export interface Extracao {
   vagas: number | null;
   cadastroReserva: boolean;
   regime: "estatutario" | "clt" | "temporario" | null;
+  /** Só para temporário: quanto tempo dura o contrato. */
+  duracao: Duracao | null;
   taxaCentavos: number | null;
   inscricoesAte: string | null;
   isencaoAte: string | null;
@@ -364,6 +416,7 @@ export function extrair(materia: Materia): Extracao {
     vagas: vagas ? Number(vagas[1]!.replace(/\./g, "")) : null,
     cadastroReserva: /cadastro (de )?reserva|\+ ?\d* ?cr\b/.test(n),
     regime: temporario ? "temporario" : clt ? "clt" : /estatutari/.test(n) ? "estatutario" : null,
+    duracao: temporario ? duracaoTemporario(n) : null,
     taxaCentavos: taxa ? valorEmCentavos(taxa[1]!, false) : null,
     ...datas,
     salarios: extrairSalarios(n, todoTi),

@@ -31,6 +31,8 @@ export interface RelatorioEditais {
   materiasAbertas: number;
   concursosNovos: number;
   concursosAtualizados: number;
+  /** Recalculados com uma regra nova de avaliação. */
+  recalculados?: number;
   ignoradas: Record<string, number>;
   elapsedMs: number;
 }
@@ -93,6 +95,7 @@ export async function recalcular(id: string, antes: Agregado | null) {
   await db.transaction([
     db`update concursos set
          fase = ${ag.fase}, visivel = ${av.visivel}, motivo_oculto = ${av.motivo}, area = ${av.area},
+         visivel_geral = ${av.visivelGeral}, peso_geral = ${av.pesoGeral},
          situacao_salario = ${av.situacaoSalario}, salario_inicial_centavos = ${av.salarioInicialCentavos},
          salario_final_centavos = ${av.salarioFinalCentavos}, peso = ${av.peso},
          inscricoes_ate = ${ag.inscricoesAte}::date, prova_em = ${ag.provaEm}::date,
@@ -214,6 +217,15 @@ export async function coletarEditais(): Promise<RelatorioEditais> {
     await recalcular(id, antes);
     relatorio.concursosAtualizados++;
   }
+
+  // Regra nova de avaliação (ex.: 015, abas Todos/Rumores): recalcula os que ainda não foram avaliados com ela.
+  const pendentes = (await db`select id::text from concursos where visivel_geral is null order by id limit 1000`.catch(() => [])) as { id: string }[];
+  for (const { id } of pendentes) {
+    if (Date.now() - inicio > PRAZO_MS + 40_000) break;
+    const [row] = (await db`select resumo from concursos where id = ${id}`) as { resumo: Agregado }[];
+    await recalcular(id, row?.resumo && Object.keys(row.resumo).length ? row.resumo : null);
+  }
+  relatorio.recalculados = pendentes.length;
 
   await db`delete from edital_urls_vistas where visto_em < now() - interval '60 days'`;
   relatorio.elapsedMs = Date.now() - inicio;

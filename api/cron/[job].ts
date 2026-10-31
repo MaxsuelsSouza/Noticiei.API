@@ -13,7 +13,7 @@ import { localDate } from "../../src/time.js";
  * - *-hoje: rodadas extras só no dia em PRIMEIRA_CARGA (primeira carga do módulo de editais). Depois não fazem nada
  *   e podem ser removidas junto com as linhas do vercel.json.
  */
-const PRIMEIRA_CARGA = "2026-10-30";
+const PRIMEIRA_CARGA = "2026-10-31";
 
 const JOBS: Record<string, () => Promise<unknown>> = {
   daily: () => runDaily(),

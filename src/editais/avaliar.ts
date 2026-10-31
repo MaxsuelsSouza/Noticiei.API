@@ -2,7 +2,7 @@
  * Junta o que várias matérias disseram sobre um concurso (agregar), decide se ele aparece e com que peso
  * (avaliar) e o que mudou desde a última vez (eventos). Funções puras.
  */
-import { FASES, ordemFase, type Extracao, type Fase, type Salario } from "./extract.js";
+import { FASES, ordemFase, type Duracao, type Extracao, type Fase, type Salario } from "./extract.js";
 import type { CargoEdital, EditalExtraido, Programatico } from "./pdf.js";
 import { CIDADES_PERTO, PESO_NACIONAL, PESO_OUTRA_UF, PESO_UF, PESO_UF_DESCONHECIDA } from "./orgaos.js";
 
@@ -15,6 +15,7 @@ export interface Agregado {
   vagas: number | null;
   cadastroReserva: boolean;
   regime: Extracao["regime"];
+  duracao: Duracao | null;
   taxaCentavos: number | null;
   inscricoesAte: string | null;
   isencaoAte: string | null;
@@ -81,6 +82,7 @@ export function agregar(entrada: FonteExtraida[]): Agregado {
     vagas: ultimo(fontes, (e) => e.vagas),
     cadastroReserva: algum((e) => e.cadastroReserva),
     regime: algum((e) => e.regime === "clt") ? "clt" : ultimo(fontes, (e) => e.regime),
+    duracao: ultimo(fontes, (e) => e.duracao ?? null),
     taxaCentavos: ultimo(fontes, (e) => e.taxaCentavos),
     inscricoesAte: ultimo(fontes, (e) => e.inscricoesAte),
     isencaoAte: ultimo(fontes, (e) => e.isencaoAte),
@@ -108,7 +110,11 @@ export type Area = "ti" | "policia_ti" | "policia";
 export type SituacaoSalario = "ok" | "so_final" | "desconhecido";
 
 export interface Avaliacao {
+  /** Aparece no seu perfil (TI e polícia/inteligência): Editais, Inscrições abertas, Favoritos, widget, avisos. */
   visivel: boolean;
+  /** Aparece em Todos e Rumores: qualquer área que pague R$ 6 mil ou mais (o do perfil também entra). */
+  visivelGeral: boolean;
+  pesoGeral: number;
   /** Por que não aparece (para diagnóstico). */
   motivo: string | null;
   area: Area | null;
@@ -139,8 +145,37 @@ export function pesoRegiao(orgao: OrgaoBase, ag: Pick<Agregado, "cidadesProva" |
   return Math.max(daProva ?? 0, doOrgao);
 }
 
+/** Concurso fora do perfil entra em Todos/Rumores pesando menos que os de TI e polícia. */
+const PESO_AREA_OUTRA = 0.3;
+
 export function avaliar(orgao: OrgaoBase, ag: Agregado): Avaliacao {
-  const oculto = (motivo: string, area: Area | null = null): Avaliacao => ({
+  const perfil = avaliarPerfil(orgao, ag);
+  if (perfil.visivel) return { ...perfil, visivelGeral: true, pesoGeral: perfil.peso };
+  // Fora do perfil: entra em Todos/Rumores se pagar 6 mil ou mais (salário conhecido), de qualquer área.
+  // PM, bombeiro, polícia penal e guarda continuam fora.
+  if (orgao.area === "fora") return { ...perfil, visivelGeral: false, pesoGeral: 0 };
+  const inicial = maior(ag.salarios.filter((s) => !s.final).map((s) => s.centavos));
+  const final = maior(ag.salarios.filter((s) => s.final).map((s) => s.centavos));
+  const situacao: SituacaoSalario | null = inicial !== null && inicial >= SALARIO_MINIMO_CENTAVOS ? "ok"
+    : final !== null && final >= SALARIO_MINIMO_CENTAVOS ? "so_final" : null;
+  if (!situacao) return { ...perfil, visivelGeral: false, pesoGeral: 0 };
+  const base = pesoRegiao(orgao, ag) * 0.5 + PESO_FASE[ag.fase] * 0.3 + PESO_AREA_OUTRA * 0.2;
+  const fator = (situacao === "so_final" ? 0.5 : 1) * (ag.regime === "temporario" ? 0.6 : 1);
+  return {
+    ...perfil,
+    // Sem o salário do cargo de TI, o cartão mostra o salário do concurso.
+    salarioInicialCentavos: perfil.salarioInicialCentavos ?? inicial,
+    salarioFinalCentavos: perfil.salarioFinalCentavos ?? final,
+    situacaoSalario: perfil.situacaoSalario ?? situacao,
+    visivelGeral: true,
+    pesoGeral: Math.round(base * fator * 1000) / 1000,
+  };
+}
+
+type AvaliacaoPerfil = Omit<Avaliacao, "visivelGeral" | "pesoGeral">;
+
+function avaliarPerfil(orgao: OrgaoBase, ag: Agregado): AvaliacaoPerfil {
+  const oculto = (motivo: string, area: Area | null = null): AvaliacaoPerfil => ({
     visivel: false, motivo, area, salarioInicialCentavos: null, salarioFinalCentavos: null, situacaoSalario: null, peso: 0,
   });
   if (orgao.area === "fora") return oculto("fora do perfil (PM, bombeiro, polícia penal, guarda)");

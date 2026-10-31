@@ -275,3 +275,29 @@ test("coleta: abre primeiro o que é de PE, depois vizinhos, BA, nacional e o re
   ].sort((a, b) => prioridade(a) - prioridade(b)).map((i) => i.titulo.split(" ")[2]);
   assert.deepEqual(ordem, ["Caruaru", "publica", "BA", "do", "Fortaleza"]);
 });
+
+test("temporário: duração do contrato, sem confundir com a validade do concurso", async () => {
+  const { duracaoTemporario } = await import("../src/editais/extract.js");
+  const d = (t: string) => duracaoTemporario(normalizar(t));
+  assert.deepEqual(d("O contrato terá duração de 12 meses, prorrogável por igual período."), { meses: 12, prorrogavel: true, ateMeses: 24 });
+  assert.deepEqual(d("Contratação temporária por até 2 anos, podendo ser prorrogada por mais 1 ano."), { meses: 24, prorrogavel: true, ateMeses: 36 });
+  assert.deepEqual(d("A seleção tem validade de 2 anos, prorrogável por igual período. O contrato será de 6 (seis) meses."), { meses: 6, prorrogavel: false, ateMeses: null });
+  assert.deepEqual(d("Processo seletivo simplificado com vigência de um ano."), { meses: 12, prorrogavel: false, ateMeses: null });
+  assert.equal(d("O concurso terá validade de dois anos."), null);
+  const e = extrair({ titulo: "Prefeitura abre seleção temporária para analista de TI", texto: "Contratos temporários de 24 meses.", publicadoEm: ref });
+  assert.equal(e.regime, "temporario");
+  assert.deepEqual(e.duracao, { meses: 24, prorrogavel: false, ateMeses: null });
+});
+
+test("avaliar: fora do perfil entra em Todos/Rumores (geral) se pagar 6 mil ou mais", () => {
+  const auditor = avaliar({ uf: "AL" }, ag({ fase: "inscricoes", salarios: [{ centavos: 2_527_068, final: false, ti: false }] }));
+  assert.equal(auditor.visivel, false);
+  assert.equal(auditor.visivelGeral, true);
+  assert.equal(auditor.salarioInicialCentavos, 2_527_068);
+  const ti = avaliar({ uf: "AL" }, ag({ temTi: true, fase: "inscricoes", salarios: [{ centavos: 800_000, final: false, ti: true }] }));
+  assert.equal(ti.visivelGeral, true);
+  assert.ok(ti.pesoGeral > auditor.pesoGeral); // TI pesa mais que outra área na mesma região e fase
+  assert.equal(avaliar({ uf: "PE", area: "fora" }, ag({ salarios: [{ centavos: 1_200_000, final: false, ti: false }] })).visivelGeral, false);
+  assert.equal(avaliar({ uf: "PE" }, ag({ salarios: [{ centavos: 500_000, final: false, ti: false }] })).visivelGeral, false);
+  assert.equal(avaliar({ uf: "PE" }, ag({})).visivelGeral, false); // fora do perfil e sem salário: não aparece
+});

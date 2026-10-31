@@ -40,10 +40,16 @@ export function itensDaListagem(html: string, base: string, padraoLink?: string 
     if (vistos.has(url.href)) continue;
     vistos.add(url.href);
     // Sobe até achar um bloco com um pouco mais de texto que o próprio link.
+    // Sobe no máximo 3 níveis (nunca até o body), senão o contexto mistura o texto de outros concursos da página.
     const proprio = limpar(a.textContent ?? "").length;
     let bloco: Element | null = a.parentElement;
-    while (bloco && limpar(bloco.textContent ?? "").length < proprio + 20 && bloco.parentElement) bloco = bloco.parentElement;
-    const contexto = limpar(bloco?.textContent ?? "").slice(0, 400);
+    for (let nivel = 0; bloco && nivel < 3 && limpar(bloco.textContent ?? "").length < proprio + 20; nivel++) {
+      const pai: Element | null = bloco.parentElement;
+      if (!pai || pai.tagName === "BODY" || pai.tagName === "HTML") break;
+      bloco = pai;
+    }
+    const texto = limpar(bloco?.textContent ?? "");
+    const contexto = (texto.length < 1500 ? texto : limpar(a.textContent ?? "")).slice(0, 400);
     itens.push({ url: url.href, titulo, contexto });
     if (itens.length >= MAX_ITENS) break;
   }
