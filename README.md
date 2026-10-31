@@ -38,8 +38,11 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/cron/editais-10h\|15h\|20h` e `editais-acompanhar-11h\|16h\|21h` | `Authorization: Bearer CRON_SECRET` | Coletas extras às 10h, 15h e 20h (Brasília), cada uma seguida do acompanhamento uma hora depois. |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 
-> **Limite de 12 funções do plano Hobby:** todos os crons ficam em [api/cron/[job].ts](api/cron/[job].ts) e todas as
-> rotas `/api/editais/*` em [api/editais.ts](api/editais.ts) (o `vercel.json` reescreve `/api/editais/<rota>` para lá).
+| `* /api/compras/*` | `x-api-key` | Lista de compras e conferência da NFC-e (veja [Compras](#compras-lista-e-conferência-da-nfc-e)). |
+
+> **Limite de 12 funções do plano Hobby (estamos em 12):** todos os crons ficam em [api/cron/[job].ts](api/cron/[job].ts),
+> as rotas `/api/editais/*` em [api/editais.ts](api/editais.ts), `/api/reservas/*` em [api/reservas.ts](api/reservas.ts)
+> e `/api/compras/*` em [api/compras.ts](api/compras.ts) (o `vercel.json` reescreve cada `/<rota>` para lá).
 > Rota nova entra numa dessas, não em arquivo novo.
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
@@ -124,6 +127,37 @@ Diagnóstico: `GET /api/editais?tipo=todos&ocultos=1` mostra tudo, com o motivo 
 rodada fica em `job_runs` (jobs `editais` e `editais-acompanhar`); o detalhe do concurso mostra cada PDF com status e erro.
 Rodar local: `npm run editais`. O teste [editais-fluxo](test/editais-fluxo.test.ts) roda o fluxo inteiro contra um
 Postgres em memória (PGlite) com sites simulados.
+
+## Compras: lista e conferência da NFC-e
+
+No mercado o app anota cada item (escaneando o código de barras ou ditando "2 arroz 4,13"); depois do caixa,
+importa a NFC-e e a API confere item a item e aponta as divergências grandes na hora. Tabelas em
+[018_compras.sql](db/migrations/018_compras.sql), código em `src/compras`.
+
+- **Catálogo:** um produto é uma embalagem (Arroz Urbano 1 kg ≠ Arroz Kaldinho 1 kg). Ele junta vários códigos: o de
+  barras da embalagem (`ean`, vale em qualquer mercado) e o código interno que a Sefaz mostra na nota (`loja`, vale só
+  naquele CNPJ). Etiqueta de balança (EAN começando com 2) traz o valor do pacote e muda a cada pesagem: o produto é
+  ligado pelo prefixo `2` + 5 dígitos e o valor sai do código (formato `2 CCCCC VVVVVV D`; confira com uma etiqueta real).
+- **Código novo:** `GET /codigo/{ean}` devolve `novo` com sugestão de nome do Open Food Facts (base colaborativa,
+  cobertura irregular no Brasil: só sugestão). O app pergunta "já foi comprado?" e chama `GET /produtos?busca=`, que
+  procura no catálogo e nas linhas de notas antigas que ainda não viraram produto. Escolher um produto →
+  `POST /produtos/{id}/codigos`; escolher uma linha de nota → `POST /produtos { codigo, itemNotaId }` (liga o código de
+  barras e o código da loja de uma vez); nada → `POST /produtos { nome, codigo }`.
+- **Nota:** o celular abre o link do QR code (IP brasileiro, sem bloqueio) e manda o HTML em
+  `POST /sessoes/{id}/nota { conteudo, url }`. Também aceita o XML ou o texto copiado da página. Só `{ url }` faz o
+  servidor tentar buscar (só `.gov.br`); se falhar responde `502 { precisaConteudo: true }`. A chave de acesso é única:
+  a mesma nota não entra duas vezes.
+- **Conferência** (`src/compras/conciliar.ts`): pareia por produto vinculado → nome parecido (abreviações do PDV
+  expandidas, desempate pelo valor) → só valor (quando é o único igual dos dois lados). Soma anotações iguais (duas
+  calabresas) e linhas iguais da nota (sabonete em dois códigos). Tipos: `OK`, `ARREDONDAMENTO` (até R$ 0,02), `PRECO`,
+  `QUANTIDADE`, `PESO`, `NAO_ANOTADO`, `NAO_ENCONTRADO`. Par `provavel` pede confirmação
+  (`POST /sessoes/{id}/pareamentos`), que vincula o código da loja ao produto: na próxima compra o par sai pelo código.
+- **Descontos e promoção:** vale o desconto da nota (XML, ou "Valor a pagar" menor que a soma dos itens); sem ele, o
+  digitado em `PATCH /sessoes/{id} { descontoManualCentavos }`. Item anotado com `emPromocao: true` é conferido: se a
+  nota cobrou mais que o preço anotado, vira o primeiro alerta (`PROMOCAO_NAO_APLICADA`).
+- **Alertas:** `relatorio.alertas`, do maior para o menor; "grande" é a partir de R$ 1,00 (`?limite=` em centavos).
+- **Caso de teste:** a compra de 31/10/2026 no Atacadão ([test/fixtures](test/fixtures/compra-2026-10-31.ts)) fecha
+  R$ 856,00 + 11,98 + 100,62 = 968,60 − 16,87 = 951,73.
 
 ## Check-in na academia
 

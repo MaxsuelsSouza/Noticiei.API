@@ -49,6 +49,14 @@
     {
       "source": "/api/editais/:rota*",
       "destination": "/api/editais?rota=:rota*"
+    },
+    {
+      "source": "/api/reservas/:dia",
+      "destination": "/api/reservas?dia=:dia"
+    },
+    {
+      "source": "/api/compras/:rota*",
+      "destination": "/api/compras?rota=:rota*"
     }
   ]
 }
