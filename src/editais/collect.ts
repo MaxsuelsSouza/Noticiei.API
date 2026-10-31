@@ -8,7 +8,7 @@ import { extractArticle } from "../extract/article.js";
 import { fetchHtml } from "../extract/extract.js";
 import { canonicalUrl } from "../text.js";
 import { agregar, avaliar, eventos, SALARIO_MINIMO_CENTAVOS, type Agregado, type FonteExtraida } from "./avaliar.js";
-import { ehPanorama, extrair, identificarOrgao, nichosNoTexto, normalizar, type Extracao, type OrgaoEncontrado } from "./extract.js";
+import { ehPanorama, extrair, identificarOrgao, nichosNoTexto, normalizar, tituloTemporario, type Extracao, type OrgaoEncontrado } from "./extract.js";
 import { itensDaListagem, pdfsDaPagina, valeAbrir, type ItemListagem } from "./listagem.js";
 
 const MAX_FALHAS = 5;
@@ -83,7 +83,22 @@ export async function recalcular(id: string, antes: Agregado | null) {
     select to_char(publicado_em at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "publicadoEm", extracao, 'noticia' as tipo, url, titulo
     from concurso_fontes where concurso_id = ${id}`) as (FonteExtraida & { titulo: string })[])
     // Extração antiga (antes da 016) não tem os cargos de formação específica: tira do título, que fica guardado.
-    .map(({ titulo, ...f }) => (f.extracao.nicho ? f : { ...f, extracao: { ...f.extracao, nicho: nichosNoTexto(normalizar(titulo)) } }));
+    .map(({ titulo, ...f }) => {
+      if ((f.extracao.versao ?? 1) >= 2) return f;
+      // Extração antiga: refaz pelo título (guardado) o que mudou depois — formação específica e regime temporário
+      // (antes qualquer menção a "temporário" marcava o concurso; agora só sinal forte).
+      const temporario = tituloTemporario(titulo);
+      const regime: Extracao["regime"] = temporario ? "temporario" : f.extracao.regime === "temporario" ? null : f.extracao.regime;
+      return <FonteExtraida>{
+        ...f,
+        extracao: {
+          ...f.extracao,
+          nicho: f.extracao.nicho ?? nichosNoTexto(normalizar(titulo)),
+          regime,
+          duracao: temporario ? f.extracao.duracao ?? null : null,
+        },
+      };
+    });
   // A tabela de PDFs vem da migração 014: antes dela, segue só com as notícias.
   const pdfs = (await db`
     select to_char(baixado_em at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as "publicadoEm", extracao,

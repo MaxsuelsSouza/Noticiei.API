@@ -382,10 +382,35 @@ export function duracaoTemporario(n: string): Duracao | null {
   return null;
 }
 
+/** Seleção temporária pelo título: "processo seletivo", "seleção simplificada"… mas não se o título fala em concurso. */
+export function tituloTemporario(titulo: string): boolean {
+  const t = normalizar(titulo);
+  if (/\bconcursos?\b/.test(t) && !/processo seletivo simplificado|selecao simplificada|contratacao temporaria/.test(t)) return false;
+  return /processo seletivo|\bselecao\b|\bpss\b|contratacao temporaria|\btemporari[oa]s?\b|\breda\b|juiz(es)? leigos?|estagi/.test(t);
+}
+
+/** Sinais fortes de contratação temporária no texto. */
+const TEMPORARIO_TEXTO = /processo seletivo simplificado|selecao (publica )?simplificada|contratacao (temporaria|por tempo determinado)|contratos? (temporarios?|por tempo determinado)|excepcional interesse publico|regime especial de direito administrativo|\breda\b|\bpss\b/g;
+/** Concurso para cargo efetivo: vence qualquer menção solta a temporário. */
+const EFETIVO = /cargos? efetivos?|provimento (de|dos|para) cargos?|estatutari|ingresso no quadro|quadro (de pessoal )?efetivo|concurso publico para (provimento|ingresso)|nomeacao|tomar posse/;
+
+/**
+ * Temporário só com sinal forte: título de seleção (sem "concurso"), ou o texto falando em contratação temporária
+ * mais de uma vez sem nenhum sinal de cargo efetivo. Uma menção solta ("veja também: seleção temporária da prefeitura")
+ * não basta.
+ */
+export function ehTemporario(titulo: string, n: string): boolean {
+  if (tituloTemporario(titulo)) return true;
+  if (/\bconcursos?\b/.test(normalizar(titulo)) || EFETIVO.test(n)) return false;
+  return (n.match(TEMPORARIO_TEXTO)?.length ?? 0) >= 2;
+}
+
 const CLT_ORGAOS = new Set(["bb", "caixa", "bnb", "serpro", "dataprev", "petrobras", "correios", "bndes", "compesa"]);
 
 export interface Extracao {
   orgao: OrgaoEncontrado | null;
+  /** 2 = regras de regime revistas (temporário só com sinal forte). Sem versão = extração antiga. */
+  versao?: number;
   fase: Fase;
   banca: string | null;
   vagas: number | null;
@@ -448,8 +473,7 @@ export function extrair(materia: Materia): Extracao {
     ?? null;
   const vagas = /(\d{1,3}(?:\.\d{3})+|\d+) (novas )?vagas/.exec(normalizar(materia.titulo)) ?? /(\d{1,3}(?:\.\d{3})+|\d+) (novas )?vagas/.exec(n);
   const taxa = /taxa de inscricao[^r]{0,40}r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?)/.exec(n);
-  const temporario = /contratacao temporaria|\btemporari[oa]s?\b|processo seletivo simplificado|selecao simplificada|\bpss\b/.test(n)
-    || /\b(abre|abrem) selecao\b|processo seletivo/.test(normalizar(materia.titulo));
+  const temporario = ehTemporario(materia.titulo, n);
   const clt = /\bclt\b|emprego publico|empregados? publicos?/.test(n) || CLT_ORGAOS.has(orgao?.chave ?? "");
   const tecnologo = /tecnologo|curso superior de tecnologia|graduacao tecnologica|qualquer (area de formacao|graduacao|curso superior|area)|nivel superior em qualquer/.test(n);
   const bacharel = /bacharel(ado)? em (ciencia da computacao|sistemas de informacao|engenharia (de|da) (computacao|software))/.test(n);
@@ -457,12 +481,16 @@ export function extrair(materia: Materia): Extracao {
   const datas = extrairDatas(n, referencia);
 
   return {
-    orgao,
+    // Seleção temporária vira um "concurso" separado do concurso efetivo do mesmo órgão (TJPB ≠ seleção de juiz leigo do TJPB).
+    orgao: orgao && temporario && tituloTemporario(materia.titulo)
+      ? { ...orgao, chave: `${orgao.chave}-selecao`, nome: `${orgao.nome} (seleção)` }
+      : orgao,
+    versao: 2,
     fase: detectarFase(materia.titulo, materia.texto),
     banca: banca?.nome ?? null,
     vagas: vagas ? Number(vagas[1]!.replace(/\./g, "")) : null,
     cadastroReserva: /cadastro (de )?reserva|\+ ?\d* ?cr\b/.test(n),
-    regime: temporario ? "temporario" : clt ? "clt" : /estatutari/.test(n) ? "estatutario" : null,
+    regime: temporario ? "temporario" : clt ? "clt" : EFETIVO.test(n) ? "estatutario" : null,
     duracao: temporario ? duracaoTemporario(n) : null,
     taxaCentavos: taxa ? valorEmCentavos(taxa[1]!, false) : null,
     ...datas,

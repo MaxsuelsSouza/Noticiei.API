@@ -85,8 +85,10 @@ export function agregar(entrada: FonteExtraida[]): Agregado {
     banca: ultimo(fontes, (e) => e.banca),
     vagas: ultimo(fontes, (e) => e.vagas),
     cadastroReserva: algum((e) => e.cadastroReserva),
-    regime: algum((e) => e.regime === "clt") ? "clt" : ultimo(fontes, (e) => e.regime),
-    duracao: ultimo(fontes, (e) => e.duracao ?? null),
+    // Concurso efetivo (CLT ou estatutário) vence: uma matéria dizendo "temporário" não muda o concurso inteiro.
+    regime: algum((e) => e.regime === "clt") ? "clt" : algum((e) => e.regime === "estatutario") ? "estatutario"
+      : algum((e) => e.regime === "temporario") ? "temporario" : null,
+    duracao: ultimo(fontes, (e) => (e.regime === "temporario" ? e.duracao ?? null : null)),
     taxaCentavos: ultimo(fontes, (e) => e.taxaCentavos),
     inscricoesAte: ultimo(fontes, (e) => e.inscricoesAte),
     isencaoAte: ultimo(fontes, (e) => e.isencaoAte),

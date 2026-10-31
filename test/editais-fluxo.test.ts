@@ -143,10 +143,10 @@ test("coleta: cria os concursos certos, ignora o que está fora do perfil e enfi
   const fila = (await sql`select tipo, status from concurso_editais order by tipo`) as { tipo: string; status: string }[];
   assert.deepEqual(fila, [{ tipo: "anterior", status: "pendente" }, { tipo: "atual", status: "pendente" }]);
   const abertos = await listar({ tipo: "abertos", ufs: ["PE"], ocultos: false });
-  assert.deepEqual(abertos.map((c) => c.orgao).sort(), ["Emprel", "TRT PE"]);
+  assert.deepEqual(abertos.map((c) => c.orgao).sort(), ["Emprel (seleção)", "TRT PE"]);
 
   // Temporário vem com a duração do contrato.
-  const emprel = lista.find((c) => c.orgao === "Emprel")!;
+  const emprel = lista.find((c) => c.orgao === "Emprel (seleção)")!;
   assert.equal(emprel.regime, "temporario");
   assert.deepEqual(emprel.duracao, { meses: 12, prorrogavel: true, ateMeses: 24 });
 

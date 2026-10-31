@@ -331,3 +331,29 @@ test("lista geral: só o que você pode fazer (diploma, técnico, sem diploma); 
   assert.equal(semReq.visivelGeral, true);
   assert.ok(semReq.pesoGeral < comReq.pesoGeral);
 });
+
+test("regime: temporário só com sinal forte; concurso efetivo vence; seleção vira concurso separado", () => {
+  // Concurso do TJPB com uma menção solta a temporário (link de outra seleção): não é temporário.
+  const tj = extrair({
+    titulo: "Concurso TJ PB: edital publicado com 50 vagas para Analista Judiciário",
+    texto: "O Tribunal de Justiça da Paraíba publicou o edital do concurso público para ingresso no quadro de pessoal. "
+      + "Veja também: prefeitura abre contratação temporária para professores.",
+    publicadoEm: ref,
+  });
+  assert.equal(tj.regime, "estatutario");
+  assert.equal(tj.orgao?.chave, "tj-pb");
+  // Seleção de juiz leigo do mesmo tribunal: temporária e em outro "concurso".
+  const leigo = extrair({ titulo: "TJ PB abre seleção para juiz leigo", texto: "Processo seletivo simplificado, contrato de 2 anos.", publicadoEm: ref });
+  assert.equal(leigo.regime, "temporario");
+  assert.equal(leigo.orgao?.chave, "tj-pb-selecao");
+  // Texto com contratação temporária repetida e nenhum sinal de efetivo: temporário.
+  assert.equal(extrair({ titulo: "Secretaria de Saúde de PE abre vagas", texto: "Contratação temporária por excepcional interesse público. Os contratos temporários duram 12 meses.", publicadoEm: ref }).regime, "temporario");
+  // Uma menção só, sem título de seleção: não basta.
+  assert.notEqual(extrair({ titulo: "Detran PE abre vagas", texto: "Haverá contratação temporária de apoio na sede.", publicadoEm: ref }).regime, "temporario");
+  // No resumo, efetivo vence temporário.
+  const a = agregar([
+    { publicadoEm: "2026-10-20T00:00:00Z", extracao: { ...tj, regime: "estatutario" } },
+    { publicadoEm: "2026-10-21T00:00:00Z", extracao: { ...tj, regime: "temporario" } },
+  ]);
+  assert.equal(a.regime, "estatutario");
+});
