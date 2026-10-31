@@ -1,33 +1,31 @@
 import { runAcompanhamento, runEditais } from "../../src/editais/run.js";
 import { isCron, json, unauthorized } from "../../src/http.js";
 import { runDaily } from "../../src/pipeline.js";
-import { localDate } from "../../src/time.js";
 
 /**
  * Todos os crons numa função só (o plano Hobby da Vercel aceita no máximo 12 funções por deploy).
- * O job vem do caminho: /api/cron/daily, /api/cron/editais, ... — horários no vercel.json.
+ * O job vem do caminho: /api/cron/daily, /api/cron/editais-10h, ... — horários (UTC) no vercel.json.
+ * No Hobby cada cron roda uma vez por dia, em algum minuto dentro da hora marcada.
  *
  * - daily: notícias (07:00 UTC = 04:00 em Brasília).
- * - editais: coleta dos editais (06:00 UTC = 03:00) e editais-acompanhar: favoritos, PDFs, edital anterior,
- *   lembretes (07:00 UTC = 04:00), para tudo estar pronto às 05:00.
- * - *-hoje: rodadas extras só no dia em PRIMEIRA_CARGA (primeira carga do módulo de editais). Depois não fazem nada
- *   e podem ser removidas junto com as linhas do vercel.json.
+ * - editais (03:00) e editais-acompanhar (04:00): tudo pronto às 05:00.
+ * - editais-10h, -15h, -20h: coletas extras; editais-acompanhar-11h, -16h, -21h: lê os PDFs e os favoritos
+ *   do que essas coletas acharam.
  */
-const PRIMEIRA_CARGA = "2026-10-31";
+const coleta = (job: string) => () => runEditais({ job });
+const acompanhamento = (job: string) => () => runAcompanhamento({ job });
 
 const JOBS: Record<string, () => Promise<unknown>> = {
   daily: () => runDaily(),
-  editais: () => runEditais(),
-  "editais-acompanhar": () => runAcompanhamento(),
-  "editais-hoje": () => soHoje(() => runEditais({ job: "editais-hoje" })),
-  "editais-hoje-2": () => soHoje(() => runEditais({ job: "editais-hoje-2" })),
-  "editais-acompanhar-hoje": () => soHoje(() => runAcompanhamento({ job: "editais-acompanhar-hoje" })),
+  editais: coleta("editais"),
+  "editais-acompanhar": acompanhamento("editais-acompanhar"),
+  "editais-10h": coleta("editais-10h"),
+  "editais-15h": coleta("editais-15h"),
+  "editais-20h": coleta("editais-20h"),
+  "editais-acompanhar-11h": acompanhamento("editais-acompanhar-11h"),
+  "editais-acompanhar-16h": acompanhamento("editais-acompanhar-16h"),
+  "editais-acompanhar-21h": acompanhamento("editais-acompanhar-21h"),
 };
-
-async function soHoje(run: () => Promise<unknown>) {
-  if (localDate() !== PRIMEIRA_CARGA) return { skipped: true, reason: `só roda em ${PRIMEIRA_CARGA}` };
-  return run();
-}
 
 export async function GET(request: Request) {
   if (!isCron(request)) return unauthorized();

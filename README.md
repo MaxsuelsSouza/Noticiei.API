@@ -35,6 +35,7 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/editais/em-alta[?uf=PE&dias=7]` | `x-api-key` | Concursos mais citados: matérias nas listagens + sites diferentes + Reddit (se configurado). Inclui os fora do perfil (`perfil: false`). |
 | `GET /api/cron/editais` | `Authorization: Bearer CRON_SECRET` | Coleta dos editais (Vercel, 06:00 UTC = 03:00 em Brasília). |
 | `GET /api/cron/editais-acompanhar` | `Authorization: Bearer CRON_SECRET` | Acompanhamento: favoritos, PDFs, edital anterior, lembretes, Reddit (07:00 UTC = 04:00): tudo pronto antes das 05:00. |
+| `GET /api/cron/editais-10h\|15h\|20h` e `editais-acompanhar-11h\|16h\|21h` | `Authorization: Bearer CRON_SECRET` | Coletas extras às 10h, 15h e 20h (Brasília), cada uma seguida do acompanhamento uma hora depois. |
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 
 > **Limite de 12 funções do plano Hobby:** todos os crons ficam em [api/cron/[job].ts](api/cron/[job].ts) e todas as

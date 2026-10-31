@@ -14,16 +14,28 @@
       "schedule": "0 7 * * *"
     },
     {
-      "path": "/api/cron/editais-hoje",
+      "path": "/api/cron/editais-10h",
       "schedule": "0 13 * * *"
     },
     {
-      "path": "/api/cron/editais-hoje-2",
+      "path": "/api/cron/editais-acompanhar-11h",
       "schedule": "0 14 * * *"
     },
     {
-      "path": "/api/cron/editais-acompanhar-hoje",
-      "schedule": "0 15 * * *"
+      "path": "/api/cron/editais-15h",
+      "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/editais-acompanhar-16h",
+      "schedule": "0 19 * * *"
+    },
+    {
+      "path": "/api/cron/editais-20h",
+      "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/cron/editais-acompanhar-21h",
+      "schedule": "0 0 * * *"
     }
   ],
   "fluid": true,
@@ -38,7 +50,5 @@
       "source": "/api/editais/:rota*",
       "destination": "/api/editais?rota=:rota*"
     }
-  ],
-  "buildCommand": "mkdir -p public && node --import tsx scripts/carga-no-build.ts",
-  "outputDirectory": "public"
+  ]
 }
