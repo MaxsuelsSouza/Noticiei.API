@@ -1,4 +1,5 @@
 import { comTabelas } from "../src/editais/http.js";
+import { migrate } from "../src/migrate.js";
 import { isApp, json, unauthorized } from "../src/http.js";
 import { acharChave, baixarNota, lerNota } from "../src/compras/nota.js";
 import {
@@ -234,8 +235,26 @@ async function rotear(request: Request): Promise<Response> {
   return naoEncontrada();
 }
 
+/**
+ * Migrações pendentes antes do primeiro pedido de compras de cada instância. Uma migração que mexe em dados (como a
+ * limpeza 020) precisa rodar antes de a compra nova ser gravada, senão a rotina das 04:00 apagaria o que veio depois.
+ * Se falhar, recusa o pedido em vez de gravar por cima.
+ */
+let migracao: Promise<unknown> | null = null;
+const migrarUmaVez = () =>
+  (migracao ??= migrate().catch((e) => {
+    migracao = null;
+    throw e;
+  }));
+
 async function handle(request: Request): Promise<Response> {
   if (!isApp(request)) return unauthorized();
+  try {
+    await migrarUmaVez();
+  } catch (e) {
+    console.error("migração antes das compras falhou", e);
+    return json({ error: "banco sendo atualizado, tente de novo em instantes" }, 503);
+  }
   try {
     // clone: se a migração rodar no meio, a segunda tentativa lê o corpo de novo.
     return await comTabelas(() => rotear(request.clone()));

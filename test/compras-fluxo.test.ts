@@ -11,6 +11,8 @@ import { ANOTADO, HTML_SEFAZ, TEXTO_SEFAZ, URL_QR } from "./fixtures/compra-2026
 process.env.APP_API_KEY = "chave-teste";
 const { sql } = await criarBanco();
 mock.module(new URL("../src/db.ts", import.meta.url).href, { namedExports: { sql: () => sql } });
+// As migrações já rodaram no banco em memória; a rota só precisa achar que estão em dia.
+mock.module(new URL("../src/migrate.ts", import.meta.url).href, { namedExports: { migrate: async () => [] } });
 
 const offPedidos: string[] = [];
 globalThis.fetch = (async (url: string | URL) => {
@@ -36,6 +38,27 @@ async function chamar(metodo: "GET" | "POST" | "PATCH" | "DELETE", rota: string,
 
 const EAN_ARROZ = "7891000315507";
 const EAN_SUSHI = "7896006716112";
+
+test("limpeza 020: apaga compras e notas, mantém produtos, códigos e mercados", async () => {
+  const { readFileSync } = await import("node:fs");
+  const limpeza = readFileSync(new URL("../db/migrations/020_compras_limpar_testes.sql", import.meta.url), "utf8");
+  const { criarBanco: novo } = await import("./support/pglite-sql.js");
+  const { db } = await novo();
+  await db.exec(`
+    insert into compras_mercados (id, nome, cnpj) values (1, 'Atacadão', '75315333005097');
+    insert into compras_produtos (id, nome) values (1, 'Arroz');
+    insert into compras_codigos (tipo, escopo, codigo, produto_id) values ('ean', '', '7891000315507', 1), ('loja', '75315333005097', '1001', 1);
+    insert into compras_sessoes (id, mercado_id) values (1, 1);
+    insert into compras_itens (sessao_id, produto_id, descricao, quantidade, preco_unitario, valor_centavos) values (1, 1, 'Arroz', 1, 4.59, 459);
+    insert into compras_planejados (sessao_id, descricao) values (1, 'Arroz');
+    insert into compras_notas (chave, cnpj, numero, serie, subtotal_centavos, origem) values ('${"2".repeat(44)}', '75315333005097', '1', '1', 459, 'texto');
+    insert into compras_itens_nota (chave, ordem, codigo_loja, descricao, quantidade, unidade, preco_unitario, valor_centavos) values ('${"2".repeat(44)}', 1, '1001', 'ARROZ', 1, 'UN', 4.59, 459);
+  `);
+  await db.exec(limpeza);
+  const n = async (t: string) => ((await db.query<{ n: number }>(`select count(*)::int as n from ${t}`)).rows[0]!.n);
+  for (const t of ["compras_sessoes", "compras_itens", "compras_planejados", "compras_notas", "compras_itens_nota"]) assert.equal(await n(t), 0, t);
+  assert.deepEqual([await n("compras_produtos"), await n("compras_codigos"), await n("compras_mercados")], [1, 2, 1]);
+});
 
 test("sem a chave do app: 401", async () => {
   assert.equal((await chamar("GET", "sessoes", undefined, "errada")).status, 401);
