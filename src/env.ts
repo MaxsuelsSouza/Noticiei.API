@@ -28,6 +28,10 @@ export const env = {
   get borrachaUnidade() {
     return process.env.BORRACHA_UNIDADE || "Espinheiro";
   },
+  /** Chave própria do LivreQ (computador), aceita só nas rotas /api/livros/*. Opcional: sem ela, vale a do app. */
+  get livreqApiKey() {
+    return process.env.LIVREQ_API_KEY || null;
+  },
   get reddit() {
     const clientId = process.env.REDDIT_CLIENT_ID;
     const clientSecret = process.env.REDDIT_CLIENT_SECRET;

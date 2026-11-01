@@ -55,6 +55,10 @@
       "destination": "/api/reservas?dia=:dia"
     },
     {
+      "source": "/api/livros/:rota*",
+      "destination": "/api/trilha?livros=:rota*"
+    },
+    {
       "source": "/api/compras/:rota*",
       "destination": "/api/compras?rota=:rota*"
     }

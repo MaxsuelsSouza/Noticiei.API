@@ -5,7 +5,7 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 
 - **Runtime:** funções serverless da Vercel (Node 24, TypeScript)
 - **Banco:** Postgres no Neon (driver `@neondatabase/serverless`)
-- **Agendamento:** Vercel Cron, todo dia às 07:00 UTC (04:00 em Brasília)
+- **Agendamento:** Vercel Cron: rotina diária às 07:00 UTC (04:00 em Brasília) e rotinas dos editais (veja `vercel.json`)
 
 ## Rotas
 
@@ -40,12 +40,13 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/cron/daily` | `Authorization: Bearer CRON_SECRET` | Rotina diária (chamada pela Vercel). |
 
 | `* /api/compras/*` | `x-api-key` | Lista de compras e conferência da NFC-e (veja [Compras](#compras-lista-e-conferência-da-nfc-e)). |
+| `* /api/livros/*` | `x-api-key` (app ou LivreQ) | Ponte com o LivreQ: catálogo de livros, textos escritos no celular e ideias (veja [Livros](#livros-ponte-com-o-livreq)). |
+| `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
 > **Limite de 12 funções do plano Hobby (estamos em 12):** todos os crons ficam em [api/cron/[job].ts](api/cron/[job].ts),
-> as rotas `/api/editais/*` em [api/editais.ts](api/editais.ts), `/api/reservas/*` em [api/reservas.ts](api/reservas.ts)
-> e `/api/compras/*` em [api/compras.ts](api/compras.ts) (o `vercel.json` reescreve cada `/<rota>` para lá).
-> Rota nova entra numa dessas, não em arquivo novo.
-| `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
+> as rotas `/api/editais/*` em [api/editais.ts](api/editais.ts), `/api/reservas/*` em [api/reservas.ts](api/reservas.ts),
+> `/api/compras/*` em [api/compras.ts](api/compras.ts) e `/api/livros/*` em [api/trilha.ts](api/trilha.ts) (o
+> `vercel.json` reescreve cada `/<rota>` para lá). Rota nova entra numa dessas, não em arquivo novo.
 
 ## Como funciona a rotina diária
 
@@ -193,6 +194,32 @@ importa a NFC-e e a API confere item a item e aponta as divergências grandes na
 - **Caso de teste:** a compra de 31/10/2026 no Atacadão ([test/fixtures](test/fixtures/compra-2026-10-31.ts)) fecha
   R$ 856,00 + 11,98 + 100,62 = 968,60 − 16,87 = 951,73.
 
+## Livros: ponte com o LivreQ
+
+O [LivreQ](https://github.com/MaxsuelsSouza/LivreQ) (editor de livros no computador) publica o catálogo; o celular
+escreve textos e lança ideias; o LivreQ mostra os textos novos para colar onde quiser e põe as ideias na caixa
+"Lançar ideia". Nada entra no livro sozinho. Tabelas da [025](db/migrations/025_livros.sql), código em
+[src/livros](src/livros) (`parse.ts` valida, `store.ts` consulta, `rotas.ts` roteia), servido pela função da trilha.
+
+| Rota | Quem chama | O que faz |
+| --- | --- | --- |
+| `GET /api/livros/catalogo` | celular | Grupos e livros do computador, com `textos` e `novos` por livro e `catalogoEm` (última vez que o LivreQ mandou). |
+| `PUT /api/livros/catalogo` | LivreQ | `{ grupos: [{ id, nome }], livros: [{ id, grupoId?, titulo, subtitulo?, volume?, palavras, capitulos, ultimaEscritaEm? }] }` substitui o catálogo; quem não veio ganha `removido_em` (os textos ficam). |
+| `GET /api/livros/textos?livro=<id>` / `?pendentes=1` | celular / LivreQ | Textos de um livro (novos e usados) / textos novos de todos. |
+| `PUT /api/livros/textos/{uuid}` | celular | `{ livroId, titulo?, texto }` salvamento automático; pode repetir, e reenvio igual não muda `atualizado_em`. |
+| `DELETE /api/livros/textos/{uuid}[?desfazer=1]` | celular | Apaga (lógico) ou desfaz. |
+| `POST /api/livros/textos/{uuid}/usado` | LivreQ | `{ usado: true\|false }` "Já usei" / volta para novos. |
+| `GET /api/livros/ideias[?novas=1]` | celular / LivreQ | Ideias; `novas` = ainda não estão no `ideias.json`. |
+| `PUT`/`DELETE /api/livros/ideias/{uuid}` | celular | Lança, corrige (até ser importada; depois `409`) ou apaga com Desfazer. |
+| `POST /api/livros/ideias/importadas` | LivreQ | `{ ids }`: gravou no `ideias.json`. Repetir não duplica. |
+
+- **"Novo"** = não apagado e (nunca usado ou mudou depois de usado: `continuou: true`, etiqueta "continuou no celular").
+- **Ids:** livros e grupos usam o `syncId` que o LivreQ grava em `<Livro>.livreq.json` / `grupo.json` (não muda ao
+  renomear ou mover); textos e ideias usam um uuid gerado no celular (salvar de novo não duplica).
+- **Chave:** aceita a `APP_API_KEY` e, se configurada, a `LIVREQ_API_KEY` (só nestas rotas). Recomendado criar a do
+  LivreQ para o computador não guardar a chave do app.
+- Palavras contadas como no LivreQ (letras e números; travessão não conta).
+
 ## Check-in na academia
 
 `POST /api/checkin` faz o login no site da academia (Supabase Auth), lê as aulas do dia, escolhe a aula pelo horário
@@ -229,6 +256,7 @@ npm test && npm run typecheck
    - `DATABASE_URL` — string do Neon
    - `APP_API_KEY` — `openssl rand -hex 32` (a mesma vai para o app)
    - `CRON_SECRET` — `openssl rand -hex 32` (a Vercel usa automaticamente no cron)
+   - `LIVREQ_API_KEY` — opcional, `openssl rand -hex 32` (a chave que o LivreQ usa; só abre `/api/livros/*`)
    - `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — opcionais, app do tipo *script* em https://www.reddit.com/prefs/apps
 3. Depois do primeiro deploy, gere o primeiro digest sem esperar o cron:
    `curl -X POST -H "x-api-key: $APP_API_KEY" https://<seu-projeto>.vercel.app/api/digest/refresh`
