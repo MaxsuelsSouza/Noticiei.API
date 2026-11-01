@@ -12,7 +12,7 @@ mock.module(new URL("../src/db.ts", import.meta.url).href, { namedExports: { sql
 
 const { coletarEditais } = await import("../src/editais/collect.js");
 const { acompanhar } = await import("../src/editais/acompanhar.js");
-const { listar, detalhe, novidades, favoritar, emAlta } = await import("../src/editais/store.js");
+const { listar, detalhe, novidades, favoritar, emAlta, sincronizar } = await import("../src/editais/store.js");
 
 // ───────── sites simulados ─────────
 
@@ -59,6 +59,10 @@ const SITES: Record<string, { tipo: string; corpo: string | Buffer }> = {
       `As inscrições vão até ${dia(3)}. A prova objetiva será em ${dia(40)}, em Recife.`,
     ),
     `<a href="${PCI}/arquivos/edital-trt6-ti.pdf">Edital</a>`,
+  ) },
+  [`${PCI}/noticias/pm-pe-concurso`]: { tipo: "text/html", corpo: pagina(
+    "Polícia Militar de Pernambuco abre concurso para soldado",
+    paragrafos("A Polícia Militar de Pernambuco abriu concurso com 2.400 vagas para soldado, de nível médio, com salário de R$ 4.900,00.", `Inscrições até ${dia(12)}.`),
   ) },
   [`${PCI}/noticias/sefaz-al-auditor`]: { tipo: "text/html", corpo: pagina(
     "Sefaz - AL abre concurso público com vagas para o cargo de Auditor Fiscal",
@@ -124,10 +128,12 @@ test.after(() => void (globalThis.fetch = fetchOriginal));
 
 // ───────── fluxo ─────────
 
-test("coleta: cria os concursos certos, ignora o que está fora do perfil e enfileira os PDFs", async () => {
+test("coleta: guarda todas as áreas, o perfil continua igual para o APK antigo e enfileira os PDFs", async () => {
   const r = await coletarEditais();
-  assert.equal(r.concursosNovos, 4);
-  assert.ok(r.ignoradas["listagem já mostra fora do perfil/salário"]! >= 2); // Rio Real (salário) e PM
+  // Desde a 024 a PM (fora do perfil) também vira concurso; Rio Real não tem página no site simulado.
+  assert.equal(r.concursosNovos, 5);
+  assert.equal(r.ignoradas["listagem já mostra fora do perfil/salário"], undefined);
+  assert.ok(r.ignoradas["falha ao abrir"]! >= 1);
   assert.equal(r.ignoradas["panorama (vários concursos)"], 1);
 
   const lista = await listar({ tipo: "ativos", ufs: [], ocultos: false });
@@ -195,6 +201,36 @@ test("favoritar rumor pede o edital anterior; acompanhamento lê PDFs e avisa o 
   const eventosTrt = hoje.find((c) => c.id === trt.id)!.eventos as { tipo: string; descricao: string }[];
   assert.ok(eventosTrt.some((e) => e.descricao === `Prazo de inscrição mudou para ${dia(7).slice(0, 5)}`));
   assert.ok(eventosTrt.some((e) => e.tipo === "lembrete" && /Faltam 7 dias para fechar a inscrição/.test(e.descricao)));
+});
+
+test("sync: todos os concursos com áreas e salário geral; com desde, só o que mudou", async () => {
+  const tudo = await sincronizar(null);
+  assert.equal(tudo.completo, true);
+  const por = (orgao: RegExp) => tudo.concursos.find((c) => orgao.test(c.orgao))!;
+  const pm = por(/Militar|PM/);
+  assert.ok(pm.areas.includes("seguranca"));
+  assert.equal(pm.perfil, false);
+  assert.equal(pm.salarioGeral.inicialCentavos, 490_000);
+  const sefaz = por(/Sefaz AL/);
+  assert.deepEqual(sefaz.areas, ["fiscal"]);
+  const trt = por(/TRT PE/);
+  assert.ok(trt.areas.includes("ti") && trt.areas.includes("juridica"));
+  assert.ok(trt.cargos.includes("TECNICO JUDICIARIO - AREA ADMINISTRATIVA")); // todos os cargos do PDF
+  assert.equal(trt.temProgramatico, true);
+  assert.equal(trt.favorito, true);
+
+  // Nada mudou desde agora; favoritar muda o atualizado_em e entra no próximo sync.
+  const vazio = await sincronizar(new Date(tudo.agora));
+  assert.equal(vazio.concursos.length, 0);
+  await favoritar(pm.id, true);
+  const depois = await sincronizar(new Date(tudo.agora));
+  assert.deepEqual(depois.concursos.map((c) => c.id), [pm.id]);
+  assert.equal(depois.concursos[0]!.favorito, true);
+
+  // /hoje?favoritos=1: só favoritos, de qualquer área.
+  const favs = await novidades(new Date(Date.now() - 3_600_000), { favoritos: true });
+  assert.ok(favs.every((c) => c.favorito));
+  await favoritar(pm.id, false);
 });
 
 test("em alta: conta as matérias das listagens por órgão, inclusive as fora do perfil", async () => {

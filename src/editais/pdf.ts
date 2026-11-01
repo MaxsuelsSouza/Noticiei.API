@@ -11,6 +11,8 @@ const MAX_CHARS = 400_000;
 
 export interface CargoEdital {
   nome: string;
+  /** Cargo de TI (só nos `cargos`; os `cargosTi` são todos de TI). */
+  ti?: boolean;
   requisito: string | null;
   aceitaTecnologo: boolean | null;
   exigeBacharelado: boolean;
@@ -31,6 +33,8 @@ export interface Programatico {
 
 export interface EditalExtraido extends Extracao {
   cargosTi: CargoEdital[];
+  /** Todos os cargos que o edital separa (TI ou não), para o app mostrar e filtrar. */
+  cargos?: CargoEdital[];
   programatico: Programatico[];
   paginas: number;
 }
@@ -133,6 +137,13 @@ export function materiasDoTrecho(trecho: string): Materia[] {
   return materias.slice(0, MAX_MATERIAS);
 }
 
+/** Máximo de cargos de outras áreas no conteúdo programático (um edital de prefeitura tem dezenas). */
+const MAX_GRUPOS_OUTROS = 6;
+
+/**
+ * Conteúdo programático: o comum a todos e o de cada cargo de TI. Edital sem cargo de TI (desde a coleta de
+ * todas as áreas) traz os primeiros cargos, até MAX_GRUPOS_OUTROS.
+ */
 export function programaticoDeTi(texto: string, n: string): Programatico[] {
   const inicio = inicioProgramatico(texto, n);
   if (inicio === null) return [];
@@ -142,7 +153,8 @@ export function programaticoDeTi(texto: string, n: string): Programatico[] {
   // Antes do primeiro cargo costuma vir o que é comum a todos (português, raciocínio lógico...).
   const gerais = materiasDoTrecho(texto.slice(inicio, primeiro));
   if (gerais.length) grupos.push({ grupo: "Conhecimentos gerais", materias: gerais });
-  for (const b of blocos.filter((b) => b.ti)) {
+  const escolhidos = blocos.some((b) => b.ti) ? blocos.filter((b) => b.ti) : blocos.slice(0, MAX_GRUPOS_OUTROS);
+  for (const b of escolhidos) {
     const materias = materiasDoTrecho(texto.slice(b.inicio + b.cabecalho.length, Math.min(b.fim, b.inicio + 25_000)));
     if (materias.length && !grupos.some((g) => g.grupo === b.cabecalho)) grupos.push({ grupo: b.cabecalho, materias });
   }
@@ -154,21 +166,34 @@ export function programaticoDeTi(texto: string, n: string): Programatico[] {
 const TECNOLOGO = /tecnologo|cursos? superior(es)? de tecnologia|graduacao tecnologica|qualquer (area|curso|graduacao)/;
 
 export function cargosDeTi(texto: string, n: string, ate: number): CargoEdital[] {
-  return blocosDeCargo(texto, n, 0, ate).filter((b) => b.ti).slice(0, 10).map((b) => {
-    const corpo = n.slice(b.inicio, Math.min(b.fim, b.inicio + 2500));
-    const m = /(requisitos?|escolaridade|formacao exigida|pre-requisito)[^]{0,400}/.exec(corpo);
-    const req = m?.[0] ?? null;
-    const tecnologo = req ? TECNOLOGO.test(req) : false;
-    const bacharel = req ? /bacharel/.test(req) : false;
-    return {
-      nome: b.cabecalho.replace(/^cargo\s*\d*\s*[:–-]?\s*/i, "").slice(0, 140),
-      requisito: m ? texto.slice(b.inicio + m.index, b.inicio + m.index + m[0].length).replace(/\s+/g, " ").trim() : null,
-      aceitaTecnologo: tecnologo ? true : bacharel ? false : null,
-      exigeBacharelado: bacharel && !tecnologo,
-      nivelMedio: req ? /nivel medio|ensino medio|nivel tecnico|curso tecnico/.test(req) : false,
-      salarios: extrairSalarios(corpo, true),
-    };
-  });
+  return blocosDeCargo(texto, n, 0, ate).filter((b) => b.ti).slice(0, 10).map((b) => cargoDoBloco(texto, n, b, true));
+}
+
+const MAX_CARGOS = 30;
+
+/** Todos os cargos do edital, de qualquer área (`ti` marca os de TI). */
+export function cargosDoEdital(texto: string, n: string, ate: number): CargoEdital[] {
+  const vistos = new Set<string>();
+  return blocosDeCargo(texto, n, 0, ate)
+    .map((b) => ({ ...cargoDoBloco(texto, n, b, b.ti), ti: b.ti }))
+    .filter((c) => c.nome.length >= 3 && !vistos.has(c.nome) && (vistos.add(c.nome), true))
+    .slice(0, MAX_CARGOS);
+}
+
+function cargoDoBloco(texto: string, n: string, b: Bloco, todoTi: boolean): CargoEdital {
+  const corpo = n.slice(b.inicio, Math.min(b.fim, b.inicio + 2500));
+  const m = /(requisitos?|escolaridade|formacao exigida|pre-requisito)[^]{0,400}/.exec(corpo);
+  const req = m?.[0] ?? null;
+  const tecnologo = req ? TECNOLOGO.test(req) : false;
+  const bacharel = req ? /bacharel/.test(req) : false;
+  return {
+    nome: b.cabecalho.replace(/^cargo\s*\d*\s*[:–-]?\s*/i, "").slice(0, 140),
+    requisito: m ? texto.slice(b.inicio + m.index, b.inicio + m.index + m[0].length).replace(/\s+/g, " ").trim() : null,
+    aceitaTecnologo: tecnologo ? true : bacharel ? false : null,
+    exigeBacharelado: bacharel && !tecnologo,
+    nivelMedio: req ? /nivel medio|ensino medio|nivel tecnico|curso tecnico/.test(req) : false,
+    salarios: extrairSalarios(corpo, todoTi),
+  };
 }
 
 // ───────────────────────── tudo junto ─────────────────────────
@@ -193,6 +218,7 @@ export function lerEdital(texto: string, paginas: number, referencia: Date): Edi
     nivelMedio: cargosTi.some((c) => c.nivelMedio) || base.nivelMedio,
     editais: [],
     cargosTi,
+    cargos: cargosDoEdital(texto, n, inicioProg),
     programatico: programaticoDeTi(texto, n),
     paginas,
   };

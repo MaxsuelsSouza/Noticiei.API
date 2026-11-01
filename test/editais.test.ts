@@ -157,7 +157,7 @@ test("eventos: o que mudou", () => {
   assert.deepEqual(eventos(depois, depois), []);
 });
 
-test("listagem: links de matéria com o contexto; pré-filtro por salário e cargo", () => {
+test("listagem: links de matéria com o contexto; pré-filtro só tira o que não é concurso", () => {
   const html = `<html><body><nav><a href="/sobre">Sobre o site e a equipe do portal</a></nav>
     <div class="ca"><a href="/noticias/prefeitura-de-rio-real-ba-retifica-editais" title="Prefeitura de Rio Real - BA retifica editais de concursos">x</a>
       <div>BA</div><div>148 vagas até R$ 4.430,06</div></div>
@@ -168,7 +168,26 @@ test("listagem: links de matéria com o contexto; pré-filtro por salário e car
   const itens = itensDaListagem(html, "https://www.pciconcursos.com.br/concursos/nordeste/", "^/noticias/");
   assert.deepEqual(itens.map((i) => i.url.split("/").pop()), ["prefeitura-de-rio-real-ba-retifica-editais", "trt-pe-abre-concurso", "salvador-guardas"]);
   assert.match(itens[0]!.contexto, /4\.430,06/);
-  assert.deepEqual(itens.map((i) => valeAbrir(i, 600_000)), [false, true, false]);
+  // Desde a 024 guarda qualquer área e salário (quem filtra é o app): guarda municipal e salário baixo também abrem.
+  assert.deepEqual(itens.map((i) => valeAbrir(i)), [true, true, true]);
+  assert.equal(valeAbrir({ url: "https://x/y", titulo: "TRT 6 abre seleção de estagiários de TI", contexto: "" }), false);
+  assert.equal(valeAbrir({ url: "https://x/y", titulo: "Prefeitura abre vagas de jovem aprendiz", contexto: "" }), false);
+});
+
+test("coleta: ordem de abertura revezando os estados fora do Nordeste", async () => {
+  process.env.DATABASE_URL ??= "postgres://teste@localhost/teste";
+  const { ordemDeAbertura } = await import("../src/editais/collect.js");
+  const item = (titulo: string, contexto: string) => ({ url: `https://x/${titulo}`, titulo, contexto });
+  const itens = [
+    item("Concurso Prefeitura de Campinas - SP", "SP"), item("Concurso Prefeitura de Santos - SP", "SP"),
+    item("Concurso Prefeitura de Sorocaba - SP", "SP"), item("Concurso Prefeitura de Curitiba - PR", "PR"),
+    item("Concurso Prefeitura de Caruaru - PE", "PE"),
+  ];
+  const ordem = ordemDeAbertura(itens).map((i) => i.titulo);
+  assert.equal(ordem[0], "Concurso Prefeitura de Caruaru - PE");
+  // Curitiba entra antes do segundo concurso de SP.
+  assert.ok(ordem.indexOf("Concurso Prefeitura de Curitiba - PR") < ordem.indexOf("Concurso Prefeitura de Santos - SP"));
+  assert.equal(ordem.length, 5);
 });
 
 test("pdfs da matéria: só edital/retificação", () => {
@@ -356,4 +375,23 @@ test("regime: temporário só com sinal forte; concurso efetivo vence; seleção
     { publicadoEm: "2026-10-21T00:00:00Z", extracao: { ...tj, regime: "temporario" } },
   ]);
   assert.equal(a.regime, "estatutario");
+});
+
+test("atributos: áreas pelo órgão, pelo cargo e pela formação; salário geral", async () => {
+  const { areasDe, salarioGeral } = await import("../src/editais/atributos.js");
+  const sem = { temTi: false, policiaTi: false, policiaGeral: false, nicho: [] as string[] };
+  const areas = (orgaoNome: string, extra: Partial<typeof sem> = {}, orgaoArea: string | null = null, area: string | null = null) =>
+    areasDe({ orgaoNome, orgaoArea, area }, { ...sem, ...extra });
+  assert.deepEqual(areas("TJ PE"), ["juridica"]);
+  assert.deepEqual(areas("TRT PE", { temTi: true }, null, "ti"), ["ti", "juridica"]);
+  assert.deepEqual(areas("Sefaz AL"), ["fiscal"]);
+  assert.deepEqual(areas("Polícia Militar de PE", {}, "fora"), ["seguranca"]);
+  assert.deepEqual(areas("Polícia Federal", { policiaGeral: true }, "policia", "policia"), ["policia"]);
+  assert.deepEqual(areas("Prefeitura de Três Lagoas - MS"), ["administrativa"]); // "três" não é TRE
+  assert.deepEqual(areas("Prefeitura de Caruaru", { nicho: ["medicina", "licenciatura"] }), ["saude", "educacao", "administrativa"]);
+  assert.deepEqual(areas("Instituto XYZ"), ["outras"]);
+  assert.deepEqual(
+    salarioGeral({ salarios: [{ centavos: 500_000, final: false, ti: false, acessivel: true }, { centavos: 1_500_000, final: false, ti: false }, { centavos: 2_000_000, final: true, ti: false }] }),
+    { inicialCentavos: 1_500_000, finalCentavos: 2_000_000, inicialAcessivelCentavos: 500_000 },
+  );
 });

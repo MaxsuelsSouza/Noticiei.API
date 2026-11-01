@@ -1,7 +1,7 @@
 import { buscarAnterior } from "../src/editais/acompanhar.js";
 import { runAcompanhamento, runEditais } from "../src/editais/run.js";
 import { comTabelas } from "../src/editais/http.js";
-import { detalhe, emAlta, favoritar, listar, marcarInteresse, novidades, TIPOS, type Tipo } from "../src/editais/store.js";
+import { detalhe, emAlta, favoritar, listar, marcarInteresse, novidades, sincronizar, TIPOS, type Tipo } from "../src/editais/store.js";
 import { isApp, json, unauthorized } from "../src/http.js";
 
 /**
@@ -9,7 +9,8 @@ import { isApp, json, unauthorized } from "../src/http.js";
  * O vercel.json reescreve /api/editais/<rota> para cá com ?rota=<rota>:
  *
  *   GET    /api/editais[?tipo=&escopo=&uf=&ocultos=1]   lista por peso (escopo=geral: qualquer área com R$ 6 mil+)
- *   GET    /api/editais/hoje[?desde=ISO]        o que mudou (padrão: 24 h)
+ *   GET    /api/editais/sync[?desde=ISO]        app novo: todos os concursos com atributos (com desde: só o que mudou)
+ *   GET    /api/editais/hoje[?desde=ISO&favoritos=1]   o que mudou (padrão: 24 h; favoritos=1: só favoritos, qualquer área)
  *   GET    /api/editais/em-alta[?uf=PE&dias=7]  mais citados
  *   GET    /api/editais/{id}                    detalhe
  *   PUT    /api/editais/{id}/favorito           acompanhar (num rumor, também pede o edital anterior)
@@ -45,10 +46,17 @@ async function handle(request: Request): Promise<Response> {
     return json({ tipo, escopo, total: concursos.length, concursos });
   }
 
+  if (primeiro === "sync" && !acao && metodo === "GET") {
+    const desde = params.get("desde") ? new Date(params.get("desde")!) : null;
+    if (desde && Number.isNaN(desde.getTime())) return json({ error: "desde inválido (use ISO 8601)" }, 400);
+    const r = await comTabelas(() => sincronizar(desde));
+    return json({ ...r, total: r.concursos.length });
+  }
+
   if (primeiro === "hoje" && !acao && metodo === "GET") {
     const desde = params.get("desde") ? new Date(params.get("desde")!) : new Date(Date.now() - 24 * 3_600_000);
     if (Number.isNaN(desde.getTime())) return json({ error: "desde inválido (use ISO 8601)" }, 400);
-    const concursos = await comTabelas(() => novidades(desde));
+    const concursos = await comTabelas(() => novidades(desde, { favoritos: params.get("favoritos") === "1" }));
     return json({ desde: desde.toISOString(), total: concursos.length, concursos });
   }
 

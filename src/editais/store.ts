@@ -1,6 +1,7 @@
 /** Consultas das rotas /api/editais. */
 import { sql } from "../db.js";
 import { TIME_ZONE } from "../time.js";
+import { atributos } from "./atributos.js";
 import { acessoDe, NOME_FASE, type Agregado } from "./avaliar.js";
 import type { Fase } from "./extract.js";
 
@@ -138,6 +139,8 @@ export async function detalhe(id: number) {
     editais: r.editais ?? [],
     exigeBacharelado: r.exigeBacharelado ?? false,
     cargosTi: r.cargosTi ?? [],
+    /** Todos os cargos do edital (TI ou não; `ti` marca os de TI). Vazio enquanto o PDF não foi lido com a 024. */
+    cargos: r.cargos ?? [],
     /** Matérias e assuntos do edital atual (vazio enquanto o PDF não foi lido). */
     programatico: r.programatico ?? [],
     editalAnterior: r.editalAnterior
@@ -152,22 +155,58 @@ export async function detalhe(id: number) {
   };
 }
 
-/** O que mudou desde `desde` (padrão: últimas 24 h), só de concursos que aparecem. */
-export async function novidades(desde: Date) {
+/**
+ * O que mudou desde `desde` (padrão: últimas 24 h). Padrão: só concursos do perfil (APK antigo).
+ * `favoritos`: só os favoritados, de qualquer área (o app novo só avisa favorito).
+ */
+export async function novidades(desde: Date, { favoritos = false } = {}) {
   const db = sql();
   const rows = (await db`
     select ${colunas()}, (select json_agg(json_build_object('tipo', e.tipo, 'descricao', e.descricao, 'em', e.em) order by e.em)
                         from concurso_eventos e where e.concurso_id = c.id and e.em >= ${desde.toISOString()}) as eventos
     from concursos c
-    where c.visivel and exists (select 1 from concurso_eventos e where e.concurso_id = c.id and e.em >= ${desde.toISOString()})
+    where (case when ${favoritos} then c.favorito else c.visivel end) and exists (select 1 from concurso_eventos e where e.concurso_id = c.id and e.em >= ${desde.toISOString()})
     order by c.favorito desc, c.peso desc`) as (Linha & { eventos: unknown[] })[];
   return rows.map((l) => ({ ...cartao(l), eventos: l.eventos }));
+}
+
+/** Concurso encerrado há mais que isso sai da primeira sincronização do app (o app também apaga do aparelho). */
+export const DIAS_ENCERRADO_NO_APP = 60;
+
+/**
+ * Sincronização do app (desde a 024): todos os concursos, de qualquer área, salário e estado, com os atributos para
+ * o app filtrar no aparelho. Sem `desde`, a lista inteira (menos encerrado antigo); com `desde`, só o que mudou
+ * depois (o app junta com o que já tem). `agora` vai no próximo `desde`.
+ */
+export async function sincronizar(desde: Date | null) {
+  const db = sql();
+  const [linha] = (await db`select now() as agora`) as { agora: string }[];
+  const rows = (await db`
+    select ${colunas()}, c.orgao_area, c.interesse from concursos c
+    where case when ${desde === null}
+      then c.fase <> 'encerrado' or c.mudou_em > now() - make_interval(days => ${DIAS_ENCERRADO_NO_APP})
+      else c.atualizado_em > ${desde?.toISOString() ?? null}::timestamptz end
+    order by c.id`) as (Linha & { orgao_area: string | null; interesse: boolean })[];
+  return {
+    agora: new Date(linha!.agora).toISOString(),
+    completo: desde === null,
+    concursos: rows.map((l) => {
+      const { oculto: _oculto, ...card } = cartao(l) as ReturnType<typeof cartao> & { oculto?: string };
+      return {
+        ...card,
+        ...atributos({ orgaoNome: l.orgao_nome, orgaoArea: l.orgao_area, area: l.area }, l.resumo ?? {}),
+        interesse: l.interesse ?? false,
+        primeiraVez: new Date(l.primeira_vez).toISOString(),
+      };
+    }),
+  };
 }
 
 /** Favoritar um concurso que ainda não tem edital também pede a busca do edital anterior. */
 export async function favoritar(id: number, favorito: boolean) {
   const [row] = (await sql()`
     update concursos set favorito = ${favorito}, favoritado_em = case when ${favorito} then now() else null end,
+      atualizado_em = now(),
       busca_anterior = case when ${favorito} and busca_anterior is null and fase in ('rumor', 'autorizado', 'comissao', 'banca')
                             then 'pendente' else busca_anterior end
     where id = ${id} returning id, busca_anterior`) as { id: string; busca_anterior: string | null }[];
@@ -177,7 +216,7 @@ export async function favoritar(id: number, favorito: boolean) {
 /** "Tenho interesse": marca e pede a busca do edital anterior (se ainda não foi achado). */
 export async function marcarInteresse(id: number) {
   const [row] = (await sql()`
-    update concursos set interesse = true,
+    update concursos set interesse = true, atualizado_em = now(),
       busca_anterior = case when busca_anterior = 'encontrado' then busca_anterior else 'pendente' end
     where id = ${id} returning busca_anterior`) as { busca_anterior: string }[];
   return row?.busca_anterior ?? null;

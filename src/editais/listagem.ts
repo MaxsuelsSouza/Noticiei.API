@@ -3,7 +3,7 @@
  * tira os links de PDF. Regras sobre o HTML, sem depender do layout de um site específico.
  */
 import { parseHTML } from "linkedom";
-import { extrairSalarios, normalizar } from "./extract.js";
+import { normalizar } from "./extract.js";
 
 export interface ItemListagem {
   url: string;
@@ -57,16 +57,11 @@ export function itensDaListagem(html: string, base: string, padraoLink?: string 
 }
 
 /**
- * Pré-filtro barato, antes de baixar a matéria: se a listagem já diz que o maior salário fica abaixo
- * de 6 mil (o PCI mostra "até R$ X"), ou é de algo que nunca entra (PM, bombeiro, guarda), nem abre.
+ * Pré-filtro barato, antes de baixar a matéria. Desde a migração 024 a coleta guarda concurso de qualquer área e
+ * salário (quem filtra é o app): só fica de fora o que não é concurso público (estágio, jovem aprendiz, residência).
  */
-export function valeAbrir(item: ItemListagem, salarioMinimoCentavos: number): boolean {
-  const n = normalizar(`${item.titulo} ${item.contexto}`);
-  if (/\b(policia militar|bombeiros?|guarda (civil )?municipal|guardas civis|policia penal|policial penal|soldado)\b/.test(normalizar(item.titulo))
-      && !/\b(ti|tecnologia da informacao|informatica)\b/.test(n)) return false;
-  if (/\bestagi|jovem aprendiz|residencia (medica|multiprofissional)\b/.test(normalizar(item.titulo))) return false;
-  const salarios = extrairSalarios(n).map((s) => s.centavos);
-  return salarios.length === 0 || Math.max(...salarios) >= salarioMinimoCentavos;
+export function valeAbrir(item: ItemListagem): boolean {
+  return !/\bestagi|jovem aprendiz|residencia (medica|multiprofissional)\b/.test(normalizar(item.titulo));
 }
 
 /** Links de PDF da página da matéria (edital, retificação). */

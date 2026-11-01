@@ -27,7 +27,8 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 | `GET /api/trilha` | `x-api-key` | Personalização da trilha de estudos (anotações, links, ajustes de material, tópicos e cursos criados) no formato do app; `updatedAt: null` = nunca gravada. |
 | `PUT /api/trilha` | `x-api-key` | Grava a personalização inteira (substitui a anterior), em tabelas `trilha_*` ([011](db/migrations/011_trilha_extras.sql)). |
 | `GET /api/editais[?tipo=ativos\|rumores\|editais\|abertos\|favoritos\|todos&escopo=geral&uf=PE,PB&ocultos=1]` | `x-api-key` | Concursos que passam no filtro, por peso. `escopo=geral` (abas Todos e Rumores): qualquer área com salário de R$ 6 mil+ (`perfil: false` = fora de TI/polícia). `ocultos=1` inclui os escondidos com o motivo. Temporário traz `duracao` do contrato. |
-| `GET /api/editais/hoje[?desde=ISO]` | `x-api-key` | O que mudou nas últimas 24 h (concurso novo, fase, banca, prazo, prova, edital). |
+| `GET /api/editais/sync[?desde=ISO]` | `x-api-key` | **App 1.9+**: todos os concursos (qualquer área, salário e estado) com os atributos para o app filtrar no aparelho: `areas`, `salarioGeral`, `acesso`, `nicho`, `cidadesProva`, `isencaoAte`, `taxaCentavos`, `temProgramatico`, `temAnterior`, `cargos`. Sem `desde`: a lista inteira (menos encerrado há mais de 60 dias); com `desde` (o `agora` da resposta anterior): só o que mudou. |
+| `GET /api/editais/hoje[?desde=ISO&favoritos=1]` | `x-api-key` | O que mudou nas últimas 24 h (concurso novo, fase, banca, prazo, prova, edital). Padrão: só o perfil (APK antigo); `favoritos=1`: só favoritos, de qualquer área (o app novo só avisa favorito). |
 | `GET /api/editais/{id}` | `x-api-key` | Detalhe: salário, datas, banca, vagas, regime, requisito, etapas, cidades de prova, editais (PDF), matérias e histórico. |
 | `PUT`/`DELETE /api/editais/{id}/favorito` | `x-api-key` | Acompanhar / deixar de acompanhar o concurso. Favoritar um concurso sem edital também pede a busca do edital anterior. |
 | `POST /api/editais/atualizar?etapa=coleta\|acompanhar` | `x-api-key` | Roda a rotina dos editais agora (coleta, depois acompanhamento: cada uma cabe nos 300 s). |
@@ -83,13 +84,16 @@ Fontes, assuntos e ligações iniciais ficam em [db/migrations/002_seed.sql](db/
 [005_digest_trilha.sql](db/migrations/005_digest_trilha.sql) e [010_secoes_noticias.sql](db/migrations/010_secoes_noticias.sql).
 Fontes com `lock_category` nunca mudam de categoria pelo assunto (ex.: MIT Technology Review fica sempre em mundo).
 Palavras-chave que começam com `re:` são expressões regulares (ex.: `how <algo> works`).
-Para adicionar fontes, crie uma nova migração (`011_...sql`).
+Para adicionar fontes, crie uma nova migração com o próximo número livre (veja `db/migrations`).
 
 ## Editais (concursos)
 
 Todo dia (cron próprio, 03:00 em Brasília) lê as listagens dos sites de concurso ([013](db/migrations/013_editais.sql),
-tabela `edital_sites`: PCI Concursos Nordeste/Nacional e o blog do Gran por estado — nenhum tem RSS útil), abre as matérias
-novas (até 150 por rodada, PE primeiro, respeitando o `robots.txt`) e extrai por regras, sem IA ([src/editais](src/editais)):
+tabela `edital_sites`: PCI Concursos por região e Nacional e o blog do Gran por estado — todo o país desde a
+[024](db/migrations/024_editais_brasil.sql); nenhum tem RSS útil), abre as matérias novas (até 150 por rodada, respeitando o
+`robots.txt`: PE, vizinhos, BA e nacional primeiro, o resto do país revezando por estado) e extrai por regras, sem IA
+([src/editais](src/editais)). Desde a 024 a coleta **guarda concurso de qualquer área e salário**; só estágio, jovem aprendiz
+e residência ficam de fora:
 
 - **Órgão** (`extract.ts` + `orgaos.ts`): dicionário de órgãos conhecidos, siglas com UF ("TJ PE", "Sefaz - AL"),
   "Prefeitura/Câmara de X". A unidade é o **concurso** (órgão + ciclo): várias matérias sobre o mesmo concurso viram um só,
@@ -100,7 +104,12 @@ novas (até 150 por rodada, PE primeiro, respeitando o `robots.txt`) e extrai po
 - **Datas** (fim da inscrição, isenção, prova), banca, vagas, cadastro reserva, regime, taxa, requisito (aceita tecnólogo ×
   exige bacharelado), etapas (discursiva, TAF, psicotécnico...), restrições (idade, altura, CNH), cidades de prova e PDFs.
 
-**Quem aparece**: cargo de TI, perito de informática, ou polícia/inteligência (PF, PRF, ABIN, Polícia Civil); PM,
+**Atributos para o app** (`atributos.ts`, rota `/sync`): áreas (TI, perícia, polícia, segurança, fiscal, jurídica,
+saúde, educação, administrativa, outras) pelo nome do órgão, pelos cargos citados e pelas formações específicas; maior
+salário inicial e final do concurso; por onde se entra (tecnólogo, qualquer superior, técnico, médio); cargos do PDF. O app
+1.9+ filtra no aparelho: a API não decide mais o que ele mostra.
+
+**Perfil antigo (APK até 1.8)** — as rotas `/api/editais` e `/hoje` sem parâmetro novo continuam assim: cargo de TI, perito de informática, ou polícia/inteligência (PF, PRF, ABIN, Polícia Civil); PM,
 bombeiro, polícia penal e guarda nunca. Exige bacharelado = some. Salário de 6 mil ou mais (inicial); só o final acima de
 6 mil = peso baixo; salário não divulgado = aparece, a menos que o maior salário do concurso fique abaixo de 6 mil.
 
@@ -114,7 +123,9 @@ PB/AL/RN 0,8; BA 0,6; nacional 0,5; outros 0,2 — mas prova em Recife/capitais 
    [Querido Diário](https://queridodiario.ok.org.br) (só municípios cobertos). Concursos com edital mas sem PDF lido: a cada 3 dias.
 2. **PDF do edital** (`pdf.ts`, [014](db/migrations/014_editais_acompanhamento.sql), tabela `concurso_editais`): baixa
    (até 15 MB), tira o texto com `unpdf` e lê o período de inscrição e de isenção, a data da prova, os cargos de TI
-   (requisito: aceita tecnólogo?; salário só do cargo) e o **conteúdo programático** (gerais + TI, em matérias e assuntos).
+   (requisito: aceita tecnólogo?; salário só do cargo), **todos os cargos** (`cargos`, até 30) e o **conteúdo programático**
+   (gerais + TI, em matérias e assuntos; edital sem cargo de TI traz os 6 primeiros cargos). Concurso com edital e sem PDF
+   lido entra de qualquer área: "tenho interesse" e perfil primeiro.
    O edital manda nos dados; notícia mais nova (prorrogação) ainda corrige o prazo. PDF escaneado fica `sem_texto`.
    Antes de sair o edital, o PDF que a matéria linka é o do concurso **anterior** (não mexe em fase nem datas).
 3. **Edital anterior** ("tenho interesse" ou favoritar um rumor): ciclo anterior do mesmo órgão, PDFs das matérias do

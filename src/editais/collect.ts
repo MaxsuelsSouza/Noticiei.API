@@ -7,7 +7,7 @@ import { sql } from "../db.js";
 import { extractArticle } from "../extract/article.js";
 import { fetchHtml } from "../extract/extract.js";
 import { canonicalUrl } from "../text.js";
-import { agregar, avaliar, eventos, SALARIO_MINIMO_CENTAVOS, type Agregado, type FonteExtraida } from "./avaliar.js";
+import { agregar, avaliar, eventos, type Agregado, type FonteExtraida } from "./avaliar.js";
 import { ehPanorama, extrair, identificarOrgao, nichosNoTexto, normalizar, tituloTemporario, type Extracao, type OrgaoEncontrado } from "./extract.js";
 import { itensDaListagem, pdfsDaPagina, valeAbrir, type ItemListagem } from "./listagem.js";
 
@@ -183,17 +183,17 @@ export async function coletarEditais(): Promise<RelatorioEditais> {
     .map((r) => r.url_canonica));
   const novas = [...candidatos].filter(([chave]) => !vistas.has(chave)).filter(([, item]) => {
     if (ehPanorama(item.titulo)) return ignorar("panorama (vários concursos)"), false;
-    if (!valeAbrir(item, SALARIO_MINIMO_CENTAVOS)) return ignorar("listagem já mostra fora do perfil/salário"), false;
+    if (!valeAbrir(item)) return ignorar("não é concurso (estágio, aprendiz, residência)"), false;
     return true;
-  })
-    // O limite por rodada não pode deixar Pernambuco de fora: abre primeiro o que é de PE, depois vizinhos, BA e nacional.
-    .sort(([, a], [, b]) => prioridade(a) - prioridade(b))
+  });
+  const novasOrdenadas = ordemDeAbertura(novas.map(([, item]) => item))
+    .map((item) => novas.find(([, i]) => i === item)!)
     .slice(0, MAX_MATERIAS_POR_RODADA);
 
   // 3. Abre as matérias (em paralelo, até o prazo) e extrai
   const extraidas: { chave: string; item: ItemListagem & { site: string }; extracao: Extracao; publicadoEm: Date | null }[] = [];
   const naoUsar: { chave: string; motivo: string }[] = [];
-  await emParalelo(novas, CONCORRENCIA, async ([chave, item]) => {
+  await emParalelo(novasOrdenadas, CONCORRENCIA, async ([chave, item]) => {
     if (Date.now() - inicio > PRAZO_MS) return;
     try {
       if (!(await robots.allows(item.url))) return void naoUsar.push({ chave, motivo: "robots" });
@@ -243,6 +243,30 @@ export async function coletarEditais(): Promise<RelatorioEditais> {
 }
 
 const PRIORIDADE_UF: Record<string, number> = { PE: 0, PB: 1, AL: 1, RN: 1, BA: 2, BR: 3 };
+
+const ufDoItem = (item: ItemListagem) =>
+  identificarOrgao(item.titulo, item.contexto)?.uf ?? /(?:^|\s|-|\()([A-Z]{2})(?:\s|\)|$)/.exec(item.contexto)?.[1] ?? null;
+
+/**
+ * Ordem de abertura com o limite por rodada: PE, vizinhos, BA e nacional primeiro (como antes); o resto do país
+ * se reveza por estado, para um estado com muita matéria (SP) não ocupar a rodada inteira.
+ */
+export function ordemDeAbertura(itens: ItemListagem[]): ItemListagem[] {
+  const ordenados = [...itens].sort((a, b) => prioridade(a) - prioridade(b));
+  const perto = ordenados.filter((i) => prioridade(i) < 4);
+  const resto = ordenados.filter((i) => prioridade(i) >= 4);
+  const porUf = new Map<string, ItemListagem[]>();
+  for (const i of resto) {
+    const uf = ufDoItem(i) ?? "?";
+    porUf.set(uf, [...(porUf.get(uf) ?? []), i]);
+  }
+  const filas = [...porUf.values()];
+  const revezados: ItemListagem[] = [];
+  for (let rodada = 0; revezados.length < resto.length; rodada++) {
+    for (const fila of filas) if (fila[rodada]) revezados.push(fila[rodada]!);
+  }
+  return [...perto, ...revezados];
+}
 
 /** Ordem de abertura: região (pelo órgão do título ou a UF da listagem) e, de desempate, cargo de TI citado. */
 export function prioridade(item: ItemListagem): number {

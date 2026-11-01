@@ -38,6 +38,8 @@ export interface Agregado {
   editais: string[];
   /** Do PDF do edital (vazio enquanto não foi lido). */
   cargosTi: CargoEdital[];
+  /** Todos os cargos do edital, de qualquer área (PDF lido depois da 024). */
+  cargos: CargoEdital[];
   programatico: Programatico[];
   /** Do edital anterior, para estudar antes de sair o novo. */
   editalAnterior: string | null;
@@ -109,6 +111,7 @@ export function agregar(entrada: FonteExtraida[]): Agregado {
     provaNasCapitais: algum((e) => e.provaNasCapitais),
     editais: uniao(es.map((e) => e.editais)),
     cargosTi: [...pdfs].reverse().find((e) => e.cargosTi.length)?.cargosTi ?? [],
+    cargos: [...pdfs].reverse().find((e) => e.cargos?.length)?.cargos ?? [],
     programatico: comProgramatico(fontes)?.programatico ?? [],
     editalAnterior: anterior?.url ?? null,
     programaticoAnterior: comProgramatico(anteriores)?.programatico ?? [],

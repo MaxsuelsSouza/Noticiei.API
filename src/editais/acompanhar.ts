@@ -235,10 +235,12 @@ export async function acompanhar(): Promise<RelatorioAcompanhamento> {
     from concursos where favorito and fase not in ('encerrado') order by favoritado_em limit ${MAX_FAVORITOS}`) as Concurso[];
   const semPdf = (await db`
     select id, orgao_chave, orgao_nome, uf, esfera, fase, favorito, resumo, to_char(diario_visto_ate, 'YYYY-MM-DD') as diario_visto_ate
-    from concursos c where visivel and not favorito and fase in ('edital', 'inscricoes')
+    -- Desde a 024 a coleta guarda todas as áreas: lê o PDF de qualquer concurso com edital, o do perfil e o
+    -- "tenho interesse" primeiro (o limite por rodada é pequeno).
+    from concursos c where not favorito and fase in ('edital', 'inscricoes')
       and not exists (select 1 from concurso_editais e where e.concurso_id = c.id and e.tipo <> 'anterior' and e.status in ('ok', 'pendente'))
       and (acompanhado_em is null or acompanhado_em < now() - interval '3 days')
-    order by peso desc limit ${MAX_SEM_PDF}`) as Concurso[];
+    order by interesse desc, visivel desc, peso desc, peso_geral desc limit ${MAX_SEM_PDF}`) as Concurso[];
 
   for (const c of [...favoritos, ...semPdf]) {
     if (Date.now() > prazo) break;
