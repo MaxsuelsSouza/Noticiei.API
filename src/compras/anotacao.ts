@@ -4,7 +4,8 @@ import { numeroBr, valorLinha } from "./numeros.js";
  * Texto livre ditado ou digitado no mercado, no formato {quantidade} {produto} {preço}:
  *   "2 arroz 4,13" · "6 sabonetes 1,90 cada" · "Escova de dente 14,90"
  *   "Macaxeira 2,178kg o ela esta 4,00 por kg" · "523 gramas banana da terra esta 6,99 o kg"
- * O preço é sempre o de uma unidade (ou de 1 kg); quantidade ausente vale 1.
+ *   "300g presunto 3,99 o 100g" · "250 gramas castanha 0,08 a grama" (o preço vira o do kg)
+ * O preço é o de uma unidade, de 1 kg, de 100 g ou de 1 g; quantidade ausente vale 1.
  */
 export interface AnotacaoLida {
   descricao: string;
@@ -28,6 +29,18 @@ export function lerAnotacao(entrada: string): AnotacaoLida {
   let t = ` ${entrada.trim().replace(/\s+/g, " ")} `;
   if (!t.trim()) throw new Error("texto vazio");
 
+  // Preço por 100 g ou por grama (frios, doces a granel): "3,99 o 100g", "3,99/100g", "0,05 a grama".
+  // Vem antes do peso, senão o "100g" seria lido como peso. Guardado como preço do kg.
+  let fatorPreco = 1;
+  t = t.replace(/\s(?:o|os|a|por|cada|\/)\s?100\s?(?:g|gr|gramas?)(?=\s)|\/100\s?(?:g|gr)(?=\s)/i, () => {
+    fatorPreco = 10;
+    return " ";
+  });
+  t = t.replace(/\s(?:o|a|por|cada|\/)\s?(?:grama|g)(?=\s)/i, () => {
+    fatorPreco = 1000;
+    return " ";
+  });
+
   // Peso: "2,178kg", "2,178 kg", "523 gramas", "523g".
   let pesoKg: number | null = null;
   t = t.replace(new RegExp(String.raw`\s(${NUM})\s?(kg|quilos?|kilos?|gramas?|g)(?=\s)`, "i"), (_, n: string, u: string) => {
@@ -45,7 +58,7 @@ export function lerAnotacao(entrada: string): AnotacaoLida {
   const numeros = [...t.matchAll(new RegExp(String.raw`(?<=\s)(?:R\$\s?)?(${NUM})(?=\s)`, "gi"))];
   if (!numeros.length) throw new Error("não achei o preço (ex.: 2 arroz 4,13)");
   const ultimo = numeros[numeros.length - 1]!;
-  const preco = numeroBr(ultimo[1]!);
+  const preco = Math.round(numeroBr(ultimo[1]!) * fatorPreco * 10000) / 10000;
   let quantidade = 1;
   let resto = t.slice(0, ultimo.index) + " " + t.slice(ultimo.index! + ultimo[0].length);
   if (numeros.length > 1) {
@@ -63,7 +76,7 @@ export function lerAnotacao(entrada: string): AnotacaoLida {
   const descricao = palavras.join(" ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
 
   const peso: number | null = pesoKg;
-  const unidade = peso !== null || porKg ? "KG" : "UN";
+  const unidade = peso !== null || porKg || fatorPreco > 1 ? "KG" : "UN";
   if (unidade === "KG" && peso === null && numeros.length < 2) throw new Error("faltou o peso (ex.: 1,5kg batata 6,49 o kg)");
   const qtd = peso ?? quantidade;
   if (!(qtd > 0)) throw new Error("quantidade deve ser maior que zero");

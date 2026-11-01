@@ -91,6 +91,10 @@ test("anotações ditadas no mercado (exemplos reais da especificação)", () =>
     ["Macaxeira 2,178kg o ela esta 4,00 por kg", "Macaxeira", 2.178, "KG", 4, 871],
     ["1,526kg batata esta 6,49 por kg", "Batata", 1.526, "KG", 6.49, 990],
     ["523 gramas banana da terra esta 6,99 o kg", "Banana da terra", 0.523, "KG", 6.99, 366],
+    ["banana 1,2kg 5,99 o kg", "Banana", 1.2, "KG", 5.99, 719],
+    ["300g presunto 3,99 o 100g", "Presunto", 0.3, "KG", 39.9, 1197],
+    ["mortadela 552 gramas 2,59/100g", "Mortadela", 0.552, "KG", 25.9, 1430],
+    ["250 gramas castanha 0,08 a grama", "Castanha", 0.25, "KG", 80, 2000],
   ];
   for (const [texto, descricao, quantidade, unidade, precoUnitario, valorCentavos] of casos) {
     assert.deepEqual(lerAnotacao(texto), { descricao, quantidade, unidade, precoUnitario, valorCentavos }, texto);
