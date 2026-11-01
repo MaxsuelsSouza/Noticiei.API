@@ -12,17 +12,30 @@ create table compras_produtos (
 
 create index compras_produtos_nome on compras_produtos (lower(nome));
 
--- Códigos que apontam para um produto:
---   ean  = código de barras da embalagem (vale em qualquer mercado; cnpj = '')
---   loja = código interno que a Sefaz mostra na nota ("Código: 15063"), que só vale naquele CNPJ
+-- Mercados. Pode nascer só com o nome ("vou no Assaí"); o CNPJ chega com a primeira nota de lá.
+create table compras_mercados (
+  id          bigserial primary key,
+  nome        text not null check (length(nome) between 1 and 80),
+  cnpj        text unique check (cnpj ~ '^\d{14}$'),
+  created_at  timestamptz not null default now()
+);
+
+-- Códigos que apontam para um produto. escopo diz onde o código vale:
+--   ean     = código de barras da embalagem: vale em qualquer mercado (escopo '')
+--   loja    = código interno que a Sefaz mostra na nota ("Código: 15063"): só naquele CNPJ (escopo = cnpj)
+--   balanca = prefixo da etiqueta de balança (2 + 5 dígitos): cada mercado numera a sua (escopo = 'm' || mercado)
 create table compras_codigos (
-  tipo        text not null check (tipo in ('ean', 'loja')),
-  cnpj        text not null default '' check (cnpj = '' or cnpj ~ '^\d{14}$'),
+  tipo        text not null check (tipo in ('ean', 'loja', 'balanca')),
+  escopo      text not null default '',
   codigo      text not null check (length(codigo) between 1 and 40),
   produto_id  bigint not null references compras_produtos (id) on delete cascade,
   created_at  timestamptz not null default now(),
-  primary key (tipo, cnpj, codigo),
-  check ((tipo = 'ean') = (cnpj = ''))
+  primary key (tipo, escopo, codigo),
+  check (
+    (tipo = 'ean' and escopo = '')
+    or (tipo = 'loja' and escopo ~ '^\d{14}$')
+    or (tipo = 'balanca' and escopo ~ '^(m\d+)?$')
+  )
 );
 
 create index compras_codigos_produto on compras_codigos (produto_id);
@@ -62,6 +75,7 @@ create table compras_itens_nota (
 create table compras_sessoes (
   id                        bigserial primary key,
   nome                      text,
+  mercado_id                bigint references compras_mercados (id) on delete set null,
   orcamento_centavos        int check (orcamento_centavos > 0),
   desconto_manual_centavos  int check (desconto_manual_centavos >= 0),
   chave                     text references compras_notas (chave) on delete set null,

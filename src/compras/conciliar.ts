@@ -258,8 +258,9 @@ export function conciliar(anotados: Anotado[], linhas: LinhaNota[], opcoes: Opco
   for (const a of ga) {
     if (usadosA.has(a)) continue;
     for (const n of gn) {
-      // Linha já vinculada a outro produto do catálogo não vai para uma anotação de outro produto.
-      if (usadosN.has(n) || (a.produtoId !== null && n.produtoId !== null)) continue;
+      // Toda linha de nota tem produto (criado na importação), então produtos diferentes ainda podem ser o mesmo
+      // item: a anotação escaneada e a linha da loja só viram um produto quando o par é aceito.
+      if (usadosN.has(n)) continue;
       const sim = similaridade(a.descricao, n.descricao);
       if (sim.anotado < 0.45) continue;
       const maior = Math.max(a.valor, n.valor, 1);

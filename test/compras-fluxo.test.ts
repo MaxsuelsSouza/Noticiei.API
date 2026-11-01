@@ -45,8 +45,10 @@ let sessaoId = 0;
 let arrozId = 0;
 
 test("primeira compra: código novo → sugestão → cadastro → reconhecido na próxima leitura", async () => {
-  const s = await chamar("POST", "sessoes", { nome: "Atacadão 31/10", orcamentoCentavos: 85600 });
+  // "Outro supermercado": o mercado nasce só com o nome e aprende o CNPJ com a nota.
+  const s = await chamar("POST", "sessoes", { nome: "Feira do mês", orcamentoCentavos: 85600, mercadoNome: "Atacadão Imbiribeira" });
   assert.equal(s.status, 201);
+  assert.deepEqual([s.body.mercado.nome, s.body.mercado.cnpj], ["Atacadão Imbiribeira", null]);
   sessaoId = s.body.id;
 
   const novo = await chamar("GET", `codigo/${EAN_ARROZ}`);
@@ -60,7 +62,7 @@ test("primeira compra: código novo → sugestão → cadastro → reconhecido n
   const criado = await chamar("POST", "produtos", { nome: "Arroz Urbano parboilizado 1kg", codigo: EAN_ARROZ });
   assert.equal(criado.status, 201);
   arrozId = criado.body.id;
-  assert.deepEqual(criado.body.codigos, [{ tipo: "ean", codigo: EAN_ARROZ, cnpj: null }]);
+  assert.deepEqual(criado.body.codigos, [{ tipo: "ean", codigo: EAN_ARROZ, cnpj: null, mercadoId: null }]);
 
   const conhecido = await chamar("GET", `codigo/${EAN_ARROZ}`);
   assert.equal(conhecido.body.status, "conhecido");
@@ -105,6 +107,17 @@ test("nota: HTML baixado pelo celular → conferência com alertas e conta fecha
   assert.equal(r.body.resumo.totalPagoCentavos, 95173);
   assert.equal(r.body.resumo.fechaConta, true);
   assert.equal(r.body.alertas[0].tipo, "PROMOCAO_NAO_APLICADA");
+  // Cada linha da nota virou produto (o arroz escaneado foi juntado ao da linha, então 71 novos + o arroz).
+  assert.equal(r.body.produtosCriados, 72);
+  assert.equal(((await sql`select count(*)::int as n from compras_produtos`) as { n: number }[])[0]!.n, 72);
+  // O mercado escolhido aprendeu o CNPJ da nota.
+  assert.deepEqual([r.body.sessao.mercado.nome, r.body.sessao.mercado.cnpj], ["Atacadão Imbiribeira", "75315333005097"]);
+  assert.equal(r.body.mercadoCorrigido, false);
+  // Arroz escaneado + linha ARROZ URBANO PARB.T1 (par seguro pelo nome) viraram um produto só.
+  const arroz = r.body.pares.find((p: any) => p.anotados[0].descricao === "Arroz Urbano parboilizado 1kg");
+  assert.equal(arroz.linhas[0].produtoId, arrozId);
+  // Primeira nota: ainda não há preço anterior para comparar.
+  assert.deepEqual(r.body.precos, { subiram: [], baixaram: [], maisBaratoEmOutroMercado: [] });
 
   // Mandar de novo (ex.: o app repetiu) não duplica.
   const de_novo = await chamar("POST", `sessoes/${sessaoId}/nota`, { conteudo: TEXTO_SEFAZ });
@@ -152,16 +165,15 @@ test("segunda compra: código conhecido entra com um toque; código novo vincula
   assert.equal(arroz.body.item.precoUnitario, 4.59);
   assert.equal(arroz.body.item.valorCentavos, 459);
 
-  // Código novo do arroz de sushi: "já foi comprado?" → aparece a linha da nota antiga, que ainda não é produto.
+  // Código novo do arroz de sushi: "já foi comprado?" → o produto que veio da nota aparece na busca.
   assert.equal((await chamar("GET", `codigo/${EAN_SUSHI}`)).body.status, "novo");
   const busca = (await chamar("GET", "produtos?busca=arroz sushi")).body;
-  assert.ok(busca.produtos.some((p: any) => p.id === arrozId), "o arroz já cadastrado aparece no catálogo");
-  const linha = busca.daNota.find((l: any) => l.descricao === "ARROZ URBANO SUSHI");
-  assert.ok(linha, "a linha da nota aparece na busca");
-  assert.ok(!busca.daNota.some((l: any) => l.descricao === "ARROZ URBANO PARB.T1"), "o que já é produto não aparece de novo");
+  const doCatalogo = busca.produtos.find((p: any) => p.descricaoNota === "ARROZ URBANO SUSHI");
+  assert.equal(doCatalogo.nome, "Arroz urbano sushi");
+  assert.deepEqual(busca.daNota, []);
 
-  const sushi = await chamar("POST", "produtos", { codigo: EAN_SUSHI, itemNotaId: linha.itemNotaId });
-  assert.equal(sushi.body.nome, "ARROZ URBANO SUSHI");
+  const sushi = await chamar("POST", `produtos/${doCatalogo.id}/codigos`, { codigo: EAN_SUSHI });
+  assert.equal(sushi.body.id, doCatalogo.id);
   assert.deepEqual(sushi.body.codigos.map((c: any) => c.tipo).sort(), ["ean", "loja"]);
   const lido = await chamar("GET", `codigo/${EAN_SUSHI}`);
   assert.equal(lido.body.status, "conhecido");
@@ -170,6 +182,61 @@ test("segunda compra: código conhecido entra com um toque; código novo vincula
   // Vincular um segundo código de barras ao mesmo produto ("sim, é esse").
   const outro = await chamar("POST", `produtos/${arrozId}/codigos`, { codigo: "7891000315514" });
   assert.equal(outro.body.codigos.filter((c: any) => c.tipo === "ean").length, 2);
+});
+
+test("outro mercado: nota com outro CNPJ, par seguro junta o produto e o relatório compara os preços", async () => {
+  const mercados = (await chamar("GET", "mercados")).body.mercados;
+  assert.equal(mercados[0].nome, "Atacadão Imbiribeira");
+  const assai = await chamar("POST", "sessoes", { mercadoNome: "Assaí Boa Viagem" });
+  const sid = assai.body.id;
+  await chamar("POST", `sessoes/${sid}/itens`, { codigo: EAN_ARROZ, quantidade: 2, precoUnitario: 4.29 });
+  await chamar("POST", `sessoes/${sid}/itens`, { texto: "1 café união 14,50" });
+  await chamar("POST", `sessoes/${sid}/itens`, { texto: "2 feijão kaldinho 6,99" });
+  const chave = "26261106057223000171650010000123451123456781";
+  const texto = [
+    "ASSAI ATACADISTA", "CNPJ: 06.057.223/0001-71",
+    "ARROZ URBANO PARBOILIZADO 1KG(Código: 555)", "Qtde.: 2 UN: UN1 Vl. Unit.: 4,29", "Vl. Total", "8,58",
+    "CAFE UNIAO TRADICIONAL 500G(Código: 777)", "Qtde.: 1 UN: UN1 Vl. Unit.: 14,5", "Vl. Total", "14,50",
+    "FEIJAO KALDINHO 1KG(Código: 888)", "Qtde.: 2 UN: UN1 Vl. Unit.: 6,99", "Vl. Total", "13,98",
+    "Valor a pagar R$: 37,06", `Chave de acesso: ${chave}`,
+  ].join("\n");
+  const r = (await chamar("POST", `sessoes/${sid}/nota`, { conteudo: texto })).body;
+  assert.equal(r.resumo.fechaConta, true);
+  // O mercado criado pelo nome aprendeu o CNPJ do Assaí.
+  assert.equal(r.sessao.mercado.cnpj, "06057223000171");
+  // Arroz escaneado nos dois mercados = um produto, com o código de cada loja.
+  const arroz = (await chamar("GET", `produtos/${arrozId}`)).body;
+  assert.deepEqual(arroz.codigos.filter((c: any) => c.tipo === "loja").map((c: any) => c.cnpj).sort(), ["06057223000171", "75315333005097"]);
+  assert.equal(r.precos.maisBaratoEmOutroMercado.length, 0, "no Assaí o arroz saiu mais barato que no Atacadão");
+
+  // Café e feijão foram ditados: no Assaí viraram produtos novos, e só juntam com os do Atacadão se você confirmar.
+  const cafeAtacadao = (await chamar("GET", "produtos?busca=cafe uniao")).body.produtos.find((p: any) => p.descricaoNota === "CAFE UNIAO TRAD.");
+  const cafeAssai = r.pares.find((p: any) => p.linhas[0].descricao.startsWith("CAFE"));
+  await chamar("POST", `produtos/${cafeAtacadao.id}/codigos`, { itemNotaId: cafeAssai.linhas[0].id });
+  const rel = (await chamar("GET", `sessoes/${sid}/relatorio`)).body;
+  const cafe = rel.precos.maisBaratoEmOutroMercado.find((v: any) => v.produtoId === cafeAtacadao.id);
+  assert.deepEqual([cafe.precoUnitario, cafe.maisBaratoEm.precoUnitario, cafe.maisBaratoEm.mercado], [14.5, 13.28, "Atacadão Imbiribeira"]);
+
+  // Histórico do produto e comparação geral entre mercados.
+  const hist = (await chamar("GET", `produtos/${arrozId}/precos`)).body;
+  assert.deepEqual(hist.precos.map((p: any) => [p.mercado, p.precoUnitario]), [["Assaí Boa Viagem", 4.29], ["Atacadão Imbiribeira", 4.59]]);
+  const comp = (await chamar("GET", "precos")).body.produtos;
+  const c = comp.find((x: any) => x.produtoId === cafeAtacadao.id);
+  assert.equal(c.maisBarato.mercado, "Atacadão Imbiribeira");
+  assert.equal(c.diferencaPct, 9.2);
+});
+
+test("preço anterior no mesmo mercado: subiu ou baixou", async () => {
+  const s = (await chamar("POST", "sessoes", { mercadoId: (await chamar("GET", "mercados")).body.mercados.find((m: any) => m.cnpj === "75315333005097").id })).body.id;
+  await chamar("POST", `sessoes/${s}/itens`, { codigo: EAN_ARROZ, quantidade: 1 });
+  const chave = "26261175315333005097655100003507001048579170";
+  const valida = (await import("../src/compras/nota.js")).chaveValida;
+  let k = chave.slice(0, 43);
+  for (let d = 0; d < 10; d++) if (valida(k + d)) { k = k + d; break; }
+  const texto = ["ARROZ URBANO PARB.T1(Código: 1001)", "Qtde.: 1 UN: UND9 Vl. Unit.: 4,99", "Vl. Total", "4,99", `Chave de acesso: ${k}`].join("\n");
+  const r = (await chamar("POST", `sessoes/${s}/nota`, { conteudo: texto })).body;
+  assert.equal(r.produtosCriados, 0);
+  assert.deepEqual([r.precos.subiram[0].produtoId, r.precos.subiram[0].anterior.precoUnitario, r.precos.subiram[0].variacaoPct], [arrozId, 4.59, 8.7]);
 });
 
 test("etiqueta de balança: valor vem do código; produto ligado pelo prefixo", async () => {
@@ -196,7 +263,7 @@ test("desconto à mão, editar e apagar item", async () => {
   assert.equal(editado.body.item.valorCentavos, item.valorCentavos * 2);
   const apagado = await chamar("DELETE", `sessoes/${sessaoId}/itens/${item.id}`);
   assert.equal(apagado.body.itens.length, 60);
-  assert.equal((await chamar("GET", "sessoes")).body.sessoes.length, 3);
+  assert.equal((await chamar("GET", "sessoes")).body.sessoes.length, 5);
 });
 
 test("reservas numa função só: mesmo comportamento pelo caminho e pelo ?dia= do rewrite", async () => {

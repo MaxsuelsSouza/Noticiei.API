@@ -134,10 +134,19 @@ No mercado o app anota cada item (escaneando o código de barras ou ditando "2 a
 importa a NFC-e e a API confere item a item e aponta as divergências grandes na hora. Tabelas em
 [018_compras.sql](db/migrations/018_compras.sql), código em `src/compras`.
 
+- **Mercado:** a compra começa num mercado da lista (`GET /mercados`) ou num novo só pelo nome (`mercadoNome`,
+  "outro supermercado"). A nota é que manda: o CNPJ da chave de acesso ensina o CNPJ ao mercado escolhido ou corrige
+  a compra para o mercado certo (`mercadoCorrigido`). Durante a compra o app só mostra o último preço **naquele**
+  mercado; a comparação com os outros sai no relatório, depois da nota.
 - **Catálogo:** um produto é uma embalagem (Arroz Urbano 1 kg ≠ Arroz Kaldinho 1 kg). Ele junta vários códigos: o de
-  barras da embalagem (`ean`, vale em qualquer mercado) e o código interno que a Sefaz mostra na nota (`loja`, vale só
-  naquele CNPJ). Etiqueta de balança (EAN começando com 2) traz o valor do pacote e muda a cada pesagem: o produto é
-  ligado pelo prefixo `2` + 5 dígitos e o valor sai do código (formato `2 CCCCC VVVVVV D`; confira com uma etiqueta real).
+  barras da embalagem (`ean`, vale em qualquer mercado), o código interno que a Sefaz mostra na nota (`loja`, vale só
+  naquele CNPJ) e o prefixo da etiqueta de balança (`balanca`, de cada mercado). **Cada linha de nota importada vira
+  produto** com nome legível ("COXA FGO SADIA" → "Coxa frango sadia", renomeável): é o que dá histórico de preço já na
+  próxima nota daquele mercado, sem escanear nada. Etiqueta de balança (EAN começando com 2) traz o valor do pacote
+  e muda a cada pesagem; o valor sai do código (formato `2 CCCCC VVVVVV D`; confira com uma etiqueta real).
+- **Mesmo produto em dois mercados:** só dá para saber pelo código de barras ou pela sua confirmação. Item escaneado
+  que bate com a linha da nota pelo nome é juntado sozinho na importação; item ditado ou par "provável" junta quando
+  você confirma (`POST /sessoes/{id}/pareamentos`) ou vincula (`POST /produtos/{id}/codigos { itemNotaId }`).
 - **Código novo:** `GET /codigo/{ean}` devolve `novo` com sugestão de nome do Open Food Facts (base colaborativa,
   cobertura irregular no Brasil: só sugestão). O app pergunta "já foi comprado?" e chama `GET /produtos?busca=`, que
   procura no catálogo e nas linhas de notas antigas que ainda não viraram produto. Escolher um produto →
@@ -156,6 +165,9 @@ importa a NFC-e e a API confere item a item e aponta as divergências grandes na
   digitado em `PATCH /sessoes/{id} { descontoManualCentavos }`. Item anotado com `emPromocao: true` é conferido: se a
   nota cobrou mais que o preço anotado, vira o primeiro alerta (`PROMOCAO_NAO_APLICADA`).
 - **Alertas:** `relatorio.alertas`, do maior para o menor; "grande" é a partir de R$ 1,00 (`?limite=` em centavos).
+- **Preços:** `relatorio.precos` traz o que subiu ou baixou desde a última compra no mesmo mercado e o que saiu mais
+  barato em outro. `GET /produtos/{id}/precos` é o histórico do produto; `GET /precos` lista o que foi comprado em
+  2+ mercados com o último preço de cada um.
 - **Caso de teste:** a compra de 31/10/2026 no Atacadão ([test/fixtures](test/fixtures/compra-2026-10-31.ts)) fecha
   R$ 856,00 + 11,98 + 100,62 = 968,60 − 16,87 = 951,73.
 

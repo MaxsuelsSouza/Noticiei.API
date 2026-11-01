@@ -2,7 +2,7 @@ import { comTabelas } from "../src/editais/http.js";
 import { isApp, json, unauthorized } from "../src/http.js";
 import { acharChave, baixarNota, lerNota } from "../src/compras/nota.js";
 import {
-  adicionarItem, apagarItem, apagarSessao, atualizarSessao, buscarProdutos, confirmarPar, criarProduto, criarSessao,
+  adicionarItem, aplicarParesSeguros, compararPrecos, criarMercado, historicoPrecos, listarMercados, renomearMercado, apagarItem, apagarSessao, atualizarSessao, buscarProdutos, confirmarPar, criarProduto, criarSessao,
   editarItem, ErroCompras, getProduto, getSessao, lerCodigoDeBarras, listarSessoes, relatorio, renomearProduto,
   salvarNota, vincularCodigo,
 } from "../src/compras/store.js";
@@ -11,22 +11,28 @@ import {
  * Lista de compras com conferência da NFC-e. Todas as rotas numa função só (limite de 12 funções do plano Hobby);
  * o vercel.json reescreve /api/compras/<rota> para cá com ?rota=<rota>.
  *
- *   GET    /api/compras/codigo/{codigo}[?sugerir=0]      leu um código de barras: produto conhecido ou "novo" + sugestão
- *   GET    /api/compras/produtos?busca=arroz             "já foi comprado?": catálogo + linhas de notas antigas
- *   POST   /api/compras/produtos                         { nome?, unidade?, codigo?, itemNotaId? } cadastra o produto
+ *   GET    /api/compras/codigo/{codigo}[?sessao=&sugerir=0]   leu um código: produto conhecido (último preço naquele
+ *                                                        mercado) ou "novo" + sugestão do Open Food Facts
+ *   GET    /api/compras/mercados                         mercados usados (lista de "onde você está?")
+ *   POST   /api/compras/mercados                         { nome } outro supermercado (o CNPJ vem com a primeira nota)
+ *   PATCH  /api/compras/mercados/{id}                    { nome }
+ *   GET    /api/compras/produtos?busca=arroz[&sessao=]   "já foi comprado?": catálogo (tudo que já veio em nota)
+ *   POST   /api/compras/produtos                         { nome?, unidade?, codigo?, itemNotaId?, sessaoId? } cadastra o produto
  *   GET    /api/compras/produtos/{id}                    produto, códigos e último preço
  *   PATCH  /api/compras/produtos/{id}                    { nome?, unidade? }
- *   POST   /api/compras/produtos/{id}/codigos            { codigo?, itemNotaId? } liga um código ao produto
+ *   POST   /api/compras/produtos/{id}/codigos            { codigo?, itemNotaId?, sessaoId? } liga um código ao produto
+ *   GET    /api/compras/produtos/{id}/precos             histórico de preço pago, por mercado
+ *   GET    /api/compras/precos                           produtos comprados em 2+ mercados: último preço em cada um
  *   GET    /api/compras/sessoes                          compras recentes
- *   POST   /api/compras/sessoes                          { nome?, orcamentoCentavos? } abre a compra
+ *   POST   /api/compras/sessoes                          { nome?, orcamentoCentavos?, mercadoId? | mercadoNome? } abre a compra
  *   GET    /api/compras/sessoes/{id}                     itens, total e saldo
- *   PATCH  /api/compras/sessoes/{id}                     { nome?, orcamentoCentavos?, descontoManualCentavos? }
+ *   PATCH  /api/compras/sessoes/{id}                     { nome?, orcamentoCentavos?, descontoManualCentavos?, mercadoId? | mercadoNome? }
  *   DELETE /api/compras/sessoes/{id}
  *   POST   /api/compras/sessoes/{id}/itens               { texto } ou { codigo | produtoId, quantidade?, precoUnitario?, emPromocao? }
  *   PATCH  /api/compras/sessoes/{id}/itens/{itemId}      mesmo corpo
  *   DELETE /api/compras/sessoes/{id}/itens/{itemId}
  *   POST   /api/compras/sessoes/{id}/nota                { conteudo (HTML, XML ou texto copiado), url?, chave? } ou só { url }
- *   GET    /api/compras/sessoes/{id}/relatorio[?limite=100]   conferência (limite = a partir de quantos centavos é "grande")
+ *   GET    /api/compras/sessoes/{id}/relatorio[?limite=100]   conferência + preços (subiu, baixou, mais barato em outro mercado)
  *   POST   /api/compras/sessoes/{id}/pareamentos         { itemIds, itemNotaIds, nome? } confirma ou corrige um par
  */
 export function rotaDe(url: URL): string[] {
@@ -57,17 +63,32 @@ async function rotear(request: Request): Promise<Response> {
   if (resto.length) return naoEncontrada();
   const metodo = request.method;
 
+  const sessaoParam = idDe(url.searchParams.get("sessao") ?? undefined) ?? undefined;
+
   if (recurso === "codigo" && idTexto && !acao && metodo === "GET") {
-    return json(await lerCodigoDeBarras(idTexto, { sugerir: url.searchParams.get("sugerir") !== "0" }));
+    return json(await lerCodigoDeBarras(idTexto, { sugerir: url.searchParams.get("sugerir") !== "0", sessaoId: sessaoParam }));
+  }
+
+  if (recurso === "mercados") {
+    if (!idTexto && metodo === "GET") return json({ mercados: await listarMercados() });
+    if (!idTexto && metodo === "POST") return json(await criarMercado(texto((await corpo(request)).nome) ?? ""), 201);
+    const id = idDe(idTexto);
+    if (id && !acao && metodo === "PATCH") return json(await renomearMercado(id, texto((await corpo(request)).nome) ?? ""));
+    return naoEncontrada();
+  }
+
+  if (recurso === "precos" && !idTexto && metodo === "GET") {
+    return json({ produtos: await compararPrecos() });
   }
 
   if (recurso === "produtos") {
     if (!idTexto) {
-      if (metodo === "GET") return json(await buscarProdutos(url.searchParams.get("busca") ?? ""));
+      if (metodo === "GET") return json(await buscarProdutos(url.searchParams.get("busca") ?? "", sessaoParam));
       if (metodo === "POST") {
         const b = await corpo(request);
         const produto = await criarProduto({
           nome: texto(b.nome), unidade: texto(b.unidade) as "UN" | "KG" | undefined, codigo: texto(b.codigo), itemNotaId: numero(b.itemNotaId),
+          sessaoId: numero(b.sessaoId),
         });
         return json(produto, 201);
       }
@@ -85,8 +106,9 @@ async function rotear(request: Request): Promise<Response> {
     }
     if (acao === "codigos" && !subId && metodo === "POST") {
       const b = await corpo(request);
-      return json(await vincularCodigo(id, { codigo: texto(b.codigo), itemNotaId: numero(b.itemNotaId) }));
+      return json(await vincularCodigo(id, { codigo: texto(b.codigo), itemNotaId: numero(b.itemNotaId), sessaoId: numero(b.sessaoId) }));
     }
+    if (acao === "precos" && !subId && metodo === "GET") return json(await historicoPrecos(id));
     return naoEncontrada();
   }
 
@@ -96,7 +118,9 @@ async function rotear(request: Request): Promise<Response> {
       if (metodo === "POST") {
         const b = await request.json().catch(() => ({}));
         const dados = (b && typeof b === "object" ? b : {}) as Record<string, unknown>;
-        return json(await criarSessao({ nome: texto(dados.nome), orcamentoCentavos: numero(dados.orcamentoCentavos) }), 201);
+        return json(await criarSessao({
+          nome: texto(dados.nome), orcamentoCentavos: numero(dados.orcamentoCentavos), mercadoId: numero(dados.mercadoId), mercadoNome: texto(dados.mercadoNome),
+        }), 201);
       }
       return json({ error: "método não permitido" }, 405);
     }
@@ -115,6 +139,8 @@ async function rotear(request: Request): Promise<Response> {
           nome: "nome" in b ? (texto(b.nome) ?? null) : undefined,
           orcamentoCentavos: campo("orcamentoCentavos"),
           descontoManualCentavos: campo("descontoManualCentavos"),
+          mercadoId: campo("mercadoId"),
+          mercadoNome: texto(b.mercadoNome),
         }));
       }
       if (metodo === "DELETE") return (await apagarSessao(id)) ? json({ id }) : json({ error: "sessão não encontrada" }, 404);
@@ -161,8 +187,9 @@ async function rotear(request: Request): Promise<Response> {
       } catch (e) {
         throw new ErroCompras((e as Error).message, 422);
       }
-      const { nova } = await salvarNota(id, nota, conteudo);
-      return json({ nova, ...(await relatorio(id)) }, nova ? 201 : 200);
+      const { nova, mercadoCorrigido, produtosCriados } = await salvarNota(id, nota, conteudo);
+      await aplicarParesSeguros(id, produtosCriados);
+      return json({ nova, mercadoCorrigido, produtosCriados: produtosCriados.length, ...(await relatorio(id)) }, nova ? 201 : 200);
     }
 
     if (acao === "relatorio" && !subId && metodo === "GET") {
