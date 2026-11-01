@@ -51,6 +51,9 @@ export async function criarBanco(migracoes = join(process.cwd(), "db", "migratio
       };
     },
     {
+      /** sql.query(texto, params), como o driver do Neon: devolve as linhas. */
+      query: async (texto: string, params: unknown[] = []) =>
+        (await db.query(texto, params.map((v) => (v instanceof Date ? v.toISOString() : v)))).rows,
       transaction: async (lista: { [TRECHO]: Trecho }[]) => {
         await db.exec("begin");
         try {
