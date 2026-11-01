@@ -455,6 +455,8 @@ export interface ItemSessao {
   emPromocao: boolean;
   /** Modo caixa: você marcou se a promoção passou certa no caixa. */
   conferidoCaixa: "ok" | "errado" | null;
+  /** Último preço do produto naquele mercado quando o item foi anotado (null: primeira vez ou sem produto). */
+  precoAnterior: number | null;
   criadoEm: string;
 }
 
@@ -488,6 +490,7 @@ interface ItemRow {
   valor_centavos: number;
   em_promocao: boolean;
   conferido_caixa: "ok" | "errado" | null;
+  preco_anterior: string | null;
   created_at: Date;
 }
 
@@ -503,6 +506,7 @@ const toItem = (r: ItemRow): ItemSessao => ({
   valorCentavos: r.valor_centavos,
   emPromocao: r.em_promocao,
   conferidoCaixa: r.conferido_caixa ?? null,
+  precoAnterior: num(r.preco_anterior),
   criadoEm: new Date(r.created_at).toISOString(),
 });
 
@@ -808,9 +812,9 @@ export async function adicionarItem(sessaoId: number, dados: DadosItem): Promise
   if (!sessao) throw new ErroCompras("sessão não encontrada", 404);
   const i = await montarItem({ ...dados, conferidoCaixa: undefined }, sessao.mercado?.id ?? null);
   const rows = (await sql().query(
-    `insert into compras_itens (sessao_id, produto_id, descricao, texto_original, codigo_lido, quantidade, unidade, preco_unitario, valor_centavos, em_promocao)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
-    [sessaoId, i.produtoId, i.descricao, i.textoOriginal, i.codigoLido, i.quantidade, i.unidade, i.precoUnitario, i.valorCentavos, i.emPromocao],
+    `insert into compras_itens (sessao_id, produto_id, descricao, texto_original, codigo_lido, quantidade, unidade, preco_unitario, valor_centavos, em_promocao, preco_anterior)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *`,
+    [sessaoId, i.produtoId, i.descricao, i.textoOriginal, i.codigoLido, i.quantidade, i.unidade, i.precoUnitario, i.valorCentavos, i.emPromocao, i.anterior?.precoUnitario ?? null],
   )) as ItemRow[];
   const item = toItem(rows[0]!);
   const planejadoId = await marcarNaLista(sessaoId, item);

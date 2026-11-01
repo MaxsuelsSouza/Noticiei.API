@@ -319,6 +319,9 @@ test("na hora de bipar: preço anterior, só avisa quando mudou, aviso de 90% do
   // Preço da prateleira diferente: pede atenção e diz quanto mudou.
   const mudou = (await chamar("POST", `sessoes/${s}/itens`, { codigo: EAN_ARROZ, precoUnitario: 4.2 })).body;
   assert.deepEqual([mudou.mudouPreco, mudou.diferencaPrecoCentavos], [true, -79]);
+  // O item guarda o preço anterior: o carrinho mostra a etiqueta mesmo depois de reabrir a compra.
+  const reaberta = (await chamar("GET", `sessoes/${s}`)).body;
+  assert.deepEqual(reaberta.itens.map((i: any) => i.precoAnterior), [4.99, 4.99]);
   assert.deepEqual([mudou.sessao.percentualOrcamento, mudou.sessao.alertaOrcamento], [91.9, true]);
   // Ditado sem produto: não tem anterior.
   const novo = (await chamar("POST", `sessoes/${s}/itens`, { texto: "1 abacate 3,50" })).body;
