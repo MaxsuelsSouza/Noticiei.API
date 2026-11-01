@@ -28,9 +28,11 @@ function montar(t: Trecho, params: unknown[]): string {
   return texto;
 }
 
-export async function criarBanco(migracoes = join(process.cwd(), "db", "migrations")) {
+/** `ate`: aplica só as migrações até esse prefixo (ex.: "022"), para deixar de fora as que gravam dados reais. */
+export async function criarBanco(migracoes = join(process.cwd(), "db", "migrations"), ate?: string) {
   const db = new PGlite();
-  for (const f of readdirSync(migracoes).filter((x) => x.endsWith(".sql")).sort()) await db.exec(readFileSync(join(migracoes, f), "utf8"));
+  const arquivos = readdirSync(migracoes).filter((x) => x.endsWith(".sql") && (!ate || x.slice(0, ate.length) <= ate)).sort();
+  for (const f of arquivos) await db.exec(readFileSync(join(migracoes, f), "utf8"));
 
   const executar = async (t: Trecho) => {
     const params: unknown[] = [];

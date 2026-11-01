@@ -9,8 +9,10 @@ import { criarBanco } from "./support/pglite-sql.js";
 import { ANOTADO, HTML_SEFAZ, TEXTO_SEFAZ, URL_QR } from "./fixtures/compra-2026-10-31.js";
 
 process.env.APP_API_KEY = "chave-teste";
-const { sql } = await criarBanco();
-mock.module(new URL("../src/db.ts", import.meta.url).href, { namedExports: { sql: () => sql } });
+// Até a 022: a 023 grava a compra real de 31/10, com a mesma chave da fixture (testada à parte no fim).
+const { sql } = await criarBanco(undefined, "022");
+let bancoAtual = sql;
+mock.module(new URL("../src/db.ts", import.meta.url).href, { namedExports: { sql: () => bancoAtual } });
 // As migrações já rodaram no banco em memória; a rota só precisa achar que estão em dia.
 mock.module(new URL("../src/migrate.ts", import.meta.url).href, { namedExports: { migrate: async () => [] } });
 
@@ -43,7 +45,7 @@ test("limpeza 020: apaga compras e notas, mantém produtos, códigos e mercados"
   const { readFileSync } = await import("node:fs");
   const limpeza = readFileSync(new URL("../db/migrations/020_compras_limpar_testes.sql", import.meta.url), "utf8");
   const { criarBanco: novo } = await import("./support/pglite-sql.js");
-  const { db } = await novo();
+  const { db } = await novo(undefined, "022");
   await db.exec(`
     insert into compras_mercados (id, nome, cnpj) values (1, 'Atacadão', '75315333005097');
     insert into compras_produtos (id, nome) values (1, 'Arroz');
@@ -419,4 +421,50 @@ test("apagar compra leva a nota junto; os produtos ficam", async () => {
   assert.equal((await chamar("DELETE", `sessoes/${s}`)).status, 200);
   assert.equal(((await sql`select count(*)::int as n from compras_notas where chave = ${k}`) as { n: number }[])[0]!.n, 0);
   assert.equal(((await sql`select count(*)::int as n from compras_produtos`) as { n: number }[])[0]!.n, produtos);
+});
+
+test("migração 023: compra real de 31/10 concluída, sem divergência, nota sem texto bruto", async () => {
+  const { criarBanco: novo } = await import("./support/pglite-sql.js");
+  const { db, sql: s2 } = await novo(undefined, "022");
+  // Um produto já conhecido pelo código da loja é reaproveitado, não duplicado.
+  await db.exec(`
+    insert into compras_mercados (nome) values ('Atacadão');
+    insert into compras_produtos (id, nome, unidade) values (900, 'Coxa de frango Sadia', 'KG');
+    insert into compras_codigos (tipo, escopo, codigo, produto_id) values ('loja', '75315333005097', '15063', 900);
+    select setval(pg_get_serial_sequence('compras_produtos', 'id'), 900);
+  `);
+  const { readFileSync } = await import("node:fs");
+  const m023 = readFileSync(new URL("../db/migrations/023_compras_compra_2026_10_31.sql", import.meta.url), "utf8");
+  await db.exec(m023);
+  await db.exec(m023); // de novo: não duplica nada
+  const um = async <T,>(q: string) => (await db.query<T>(q)).rows[0]!;
+  assert.deepEqual(await um(`select count(*)::int as n from compras_sessoes`), { n: 1 });
+  assert.deepEqual(await um(`select count(*)::int as n from compras_mercados`), { n: 1 });
+  assert.deepEqual(await um(`select cnpj from compras_mercados`), { cnpj: "75315333005097" });
+  assert.deepEqual(await um(`select count(*)::int as n from compras_produtos`), { n: 72 });
+  assert.deepEqual(await um(`select nome from compras_produtos where id = 900`), { nome: "Coxa de frango Sadia" });
+  assert.deepEqual(await um(`select bruto, subtotal_centavos, descontos_centavos, total_centavos from compras_notas`),
+    { bruto: null, subtotal_centavos: 96860, descontos_centavos: 1687, total_centavos: 95173 });
+
+  bancoAtual = s2;
+  try {
+    const lista = await chamar("GET", "sessoes");
+    assert.equal(lista.status, 200);
+    const [resumo] = lista.body.sessoes ?? lista.body;
+    assert.ok(resumo.concluidaEm);
+    assert.equal(resumo.totalCentavos, 95173);
+    assert.equal(resumo.itens, 72);
+    const r = await chamar("GET", `sessoes/${resumo.id}/relatorio`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const rel = r.body.relatorio ?? r.body;
+  assert.equal(rel.naoAnotados.length, 0);
+  assert.equal(rel.naoEncontrados.length, 0);
+    const ruins = rel.pares.filter((p: any) => p.tipos.some((t: string) => t !== "OK"));
+    assert.deepEqual(ruins, []);
+    assert.equal(rel.pares.length, 72);
+    assert.equal(rel.resumo.fechaConta, true);
+    assert.deepEqual(rel.alertas, []);
+  } finally {
+    bancoAtual = sql;
+  }
 });
