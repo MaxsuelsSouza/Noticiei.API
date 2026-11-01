@@ -109,8 +109,9 @@ export function htmlParaTexto(html: string): string {
     .replace(/ *\n[\n ]*/g, "\n");
 }
 
+// "Código" aceita o ó lido com a codificação errada (página em latin-1 lida como UTF-8: "C\uFFFDdigo", "CÃ³digo").
 const ITEM =
-  /([^\n]*?\S)\s*\(\s*C[oó]digo:\s*([^)\s]+)\s*\)\s*Qtde\.?:\s*([\d.,]+)\s*UN:\s*([A-Za-z]+)\d*\s*Vl\.?\s*Unit\.?:\s*([\d.,]+)\s*Vl\.?\s*Total\s*:?\s*([\d.,]+)/g;
+  /([^\n]*?\S)\s*\(\s*C[^\sd]{1,3}digo:\s*([^)\s]+)\s*\)\s*Qtde\.?:\s*([\d.,]+)\s*UN:\s*([A-Za-z]+)\d*\s*Vl\.?\s*Unit\.?:\s*([\d.,]+)\s*Vl\.?\s*Total\s*:?\s*([\d.,]+)/g;
 
 const valorRotulo = (texto: string, rotulo: RegExp) => {
   const m = new RegExp(`${rotulo.source}\\s*(?:R\\$)?\\s*:?\\s*([\\d.]*\\d,\\d{2})`, "i").exec(texto);
@@ -127,7 +128,7 @@ function estabelecimentoDoTexto(texto: string): string | null {
   const i = linhas.findIndex((l) => /CNPJ/i.test(l));
   if (i <= 0) return null;
   const nome = linhas[i - 1]!;
-  return nome.length <= 120 && !/C[oó]digo:/i.test(nome) ? nome : null;
+  return nome.length <= 120 && !/C[^\sd]{1,3}digo:/i.test(nome) ? nome : null;
 }
 
 /** Texto copiado da página de consulta (ou HTML já convertido). */

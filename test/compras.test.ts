@@ -54,6 +54,12 @@ test("HTML da página dá o mesmo resultado que o texto copiado (script com 'Có
   assert.equal(html.totalCentavos, 95173);
 });
 
+test("página em latin-1 lida como UTF-8: o Código estragado ainda é reconhecido", () => {
+  const estragado = TEXTO_SEFAZ.replace(/Código/g, "C\uFFFDdigo");
+  assert.equal(lerNota(estragado).itens.length, 72);
+  assert.equal(lerNota(TEXTO_SEFAZ.replace(/Código/g, "CÃ³digo")).itens.length, 72);
+});
+
 test("texto sem chave pede o link ou a chave; com a chave informada lê", () => {
   const semChave = TEXTO_SEFAZ.split("Chave de acesso")[0]!;
   assert.throws(() => lerNota(semChave), /chave/);
