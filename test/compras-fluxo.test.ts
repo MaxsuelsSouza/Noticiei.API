@@ -379,3 +379,41 @@ test("comprar de novo: lista da compra anterior, marcada ao anotar, editável", 
   await chamar("DELETE", `sessoes/${s}/itens/${arroz.item.id}`);
   assert.equal((await chamar("GET", `sessoes/${s}/lista`)).body.pegos, 1);
 });
+
+test("lista de compras: sem itens não entra; com nota mostra o total e os itens da nota; concluir", async () => {
+  const vazia = (await chamar("POST", "sessoes", {})).body.id;
+  const lista = (await chamar("GET", "sessoes")).body.sessoes;
+  assert.ok(!lista.some((x: any) => x.id === vazia), "compra recém-aberta e vazia não é anterior");
+
+  // A primeira compra (61 anotados) tem nota: a lista mostra o pago na nota e as linhas da nota.
+  const primeira = lista.find((x: any) => x.id === sessaoId);
+  assert.deepEqual([primeira.totalCentavos, primeira.itens, primeira.itensAnotados > 0, primeira.concluidaEm], [95173, 72, true, null]);
+
+  const concluida = (await chamar("PATCH", `sessoes/${sessaoId}`, { concluida: true })).body;
+  assert.ok(concluida.concluidaEm);
+  assert.ok((await chamar("GET", "sessoes")).body.sessoes.find((x: any) => x.id === sessaoId).concluidaEm);
+  await chamar("DELETE", `sessoes/${vazia}`);
+});
+
+test("abandonada: aberta há mais de 1 h sem item é descartada; com item fica", async () => {
+  const vazia = (await chamar("POST", "sessoes", {})).body.id;
+  const comItem = (await chamar("POST", "sessoes", {})).body.id;
+  await chamar("POST", `sessoes/${comItem}/itens`, { texto: "1 pão 0,80" });
+  await sql`update compras_sessoes set created_at = now() - interval '61 minutes' where id in (${vazia}, ${comItem})`;
+  assert.equal((await chamar("GET", `sessoes/${vazia}`)).status, 404);
+  assert.equal((await chamar("GET", `sessoes/${comItem}`)).status, 200);
+});
+
+test("apagar compra leva a nota junto; os produtos ficam", async () => {
+  const s = (await chamar("POST", "sessoes", {})).body.id;
+  await chamar("POST", `sessoes/${s}/itens`, { texto: "1 pão 0,80" });
+  const chave = "26261175315333005097655100003508881048579171";
+  const valida = (await import("../src/compras/nota.js")).chaveValida;
+  let k = chave.slice(0, 43);
+  for (let d = 0; d < 10; d++) if (valida(k + d)) { k = k + d; break; }
+  await chamar("POST", `sessoes/${s}/nota`, { conteudo: ["PAO FRANCES(Código: 9999)", "Qtde.: 1 UN: UND9 Vl. Unit.: 0,8", "Vl. Total", "0,80", `Chave de acesso: ${k}`].join("\n") });
+  const produtos = ((await sql`select count(*)::int as n from compras_produtos`) as { n: number }[])[0]!.n;
+  assert.equal((await chamar("DELETE", `sessoes/${s}`)).status, 200);
+  assert.equal(((await sql`select count(*)::int as n from compras_notas where chave = ${k}`) as { n: number }[])[0]!.n, 0);
+  assert.equal(((await sql`select count(*)::int as n from compras_produtos`) as { n: number }[])[0]!.n, produtos);
+});

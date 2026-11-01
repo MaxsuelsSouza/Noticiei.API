@@ -3,7 +3,7 @@ import { migrate } from "../src/migrate.js";
 import { isApp, json, unauthorized } from "../src/http.js";
 import { acharChave, baixarNota, lerNota } from "../src/compras/nota.js";
 import {
-  adicionarItem, adicionarPlanejado, apagarPlanejado, editarPlanejado, getLista, modoCaixa, aplicarParesSeguros, compararPrecos, criarMercado, historicoPrecos, listarMercados, renomearMercado, apagarItem, apagarSessao, atualizarSessao, buscarProdutos, confirmarPar, criarProduto, criarSessao,
+  adicionarItem, adicionarPlanejado, descartarAbandonadas, apagarPlanejado, editarPlanejado, getLista, modoCaixa, aplicarParesSeguros, compararPrecos, criarMercado, historicoPrecos, listarMercados, renomearMercado, apagarItem, apagarSessao, atualizarSessao, buscarProdutos, confirmarPar, criarProduto, criarSessao,
   editarItem, ErroCompras, getProduto, getSessao, lerCodigoDeBarras, listarSessoes, relatorio, renomearProduto,
   salvarNota, vincularCodigo,
 } from "../src/compras/store.js";
@@ -24,12 +24,13 @@ import {
  *   POST   /api/compras/produtos/{id}/codigos            { codigo?, itemNotaId?, sessaoId? } liga um código ao produto
  *   GET    /api/compras/produtos/{id}/precos             histórico de preço pago, por mercado
  *   GET    /api/compras/precos                           produtos comprados em 2+ mercados: último preço em cada um
- *   GET    /api/compras/sessoes                          compras recentes
+ *   GET    /api/compras/sessoes                          compras com item ou nota (total e itens da nota, se houver);
+ *                                                        descarta as abertas há 1 h sem nenhum item
  *   POST   /api/compras/sessoes                          { nome?, orcamentoCentavos?, mercadoId? | mercadoNome?, comprarDeNovoDe? }
  *                                                        abre a compra (comprarDeNovoDe = id da compra a repetir como lista)
  *   GET    /api/compras/sessoes/{id}                     itens, total e saldo
- *   PATCH  /api/compras/sessoes/{id}                     { nome?, orcamentoCentavos?, descontoManualCentavos?, mercadoId? | mercadoNome? }
- *   DELETE /api/compras/sessoes/{id}
+ *   PATCH  /api/compras/sessoes/{id}                     { nome?, orcamentoCentavos?, descontoManualCentavos?, mercadoId? | mercadoNome?, concluida? }
+ *   DELETE /api/compras/sessoes/{id}                     apaga a compra e a nota dela (produtos ficam)
  *   POST   /api/compras/sessoes/{id}/itens               { texto } ou { codigo | produtoId, quantidade?, precoUnitario?, emPromocao? }
  *                                                        → { item, sessao, precoAnterior, mudouPreco, planejadoId }
  *   PATCH  /api/compras/sessoes/{id}/itens/{itemId}      mesmo corpo, mais { conferidoCaixa: ok | errado | null }
@@ -138,6 +139,7 @@ async function rotear(request: Request): Promise<Response> {
 
     if (!acao) {
       if (metodo === "GET") {
+        await descartarAbandonadas();
         const s = await getSessao(id);
         return s ? json(s) : json({ error: "sessão não encontrada" }, 404);
       }
@@ -150,6 +152,7 @@ async function rotear(request: Request): Promise<Response> {
           descontoManualCentavos: campo("descontoManualCentavos"),
           mercadoId: campo("mercadoId"),
           mercadoNome: texto(b.mercadoNome),
+          concluida: typeof b.concluida === "boolean" ? b.concluida : undefined,
         }));
       }
       if (metodo === "DELETE") return (await apagarSessao(id)) ? json({ id }) : json({ error: "sessão não encontrada" }, 404);

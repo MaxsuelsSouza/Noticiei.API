@@ -176,6 +176,9 @@ importa a NFC-e e a API confere item a item e aponta as divergências grandes na
   (pasta do app, fora da galeria) e é apagada ao terminar a compra.
 - **Comprar de novo:** `POST /sessoes { comprarDeNovoDe }` copia o que foi comprado como lista (`/sessoes/{id}/lista`,
   editável). Anotar um item marca a linha da lista (mesmo produto ou nome parecido); o relatório traz `faltouDaLista`.
+- **Ciclo da compra:** `GET /sessoes` só lista compras com item ou nota (com nota, total e itens são os da nota) e
+  descarta a aberta há 1 h sem nenhum item. `PATCH /sessoes/{id} { concluida: true }` conclui; `DELETE` apaga a compra
+  e a nota dela (produtos ficam).
 - **Caso de teste:** a compra de 31/10/2026 no Atacadão ([test/fixtures](test/fixtures/compra-2026-10-31.ts)) fecha
   R$ 856,00 + 11,98 + 100,62 = 968,60 − 16,87 = 951,73.
 

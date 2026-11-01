@@ -466,6 +466,8 @@ export interface Sessao {
   descontoManualCentavos: number | null;
   chave: string | null;
   criadaEm: string;
+  /** Concluída depois da conferência (null: em andamento). */
+  concluidaEm: string | null;
   itens: ItemSessao[];
   totalCentavos: number;
   saldoCentavos: number | null;
@@ -542,31 +544,67 @@ export async function criarSessao(dados: {
   return (await getSessao(id))!;
 }
 
+/**
+ * Compra aberta e esquecida: sem nota e sem nenhum item bipado ou digitado depois de 1 hora, é descartada.
+ * Roda ao listar e ao abrir uma compra pela rota (barato: só apaga quem está vazio).
+ */
+export async function descartarAbandonadas(): Promise<void> {
+  await sql().query(
+    `delete from compras_sessoes s
+      where s.chave is null and s.concluida_em is null and s.created_at < now() - interval '1 hour'
+        and not exists (select 1 from compras_itens i where i.sessao_id = s.id)`,
+  );
+}
+
+/**
+ * Compras anteriores, da mais nova para a mais antiga. Só entram as que têm item ou nota (a recém-aberta e vazia é
+ * só "em andamento"). Com nota, o total e a quantidade de itens são os da nota (o que foi pago de fato).
+ */
 export async function listarSessoes(limite = 20) {
+  await descartarAbandonadas();
   const rows = (await sql().query(
-    `select s.id, s.nome, s.orcamento_centavos, s.chave, s.created_at, m.id as mercado_id, m.nome as mercado_nome, m.cnpj as mercado_cnpj,
-            count(i.id)::int as itens, coalesce(sum(i.valor_centavos), 0)::int as total
-       from compras_sessoes s left join compras_itens i on i.sessao_id = s.id left join compras_mercados m on m.id = s.mercado_id
-      group by s.id, m.id order by s.created_at desc limit $1`,
+    `select s.id, s.nome, s.orcamento_centavos, s.chave, s.created_at, s.concluida_em,
+            m.id as mercado_id, m.nome as mercado_nome, m.cnpj as mercado_cnpj,
+            (select count(*)::int from compras_itens i where i.sessao_id = s.id) as itens,
+            (select coalesce(sum(i.valor_centavos), 0)::int from compras_itens i where i.sessao_id = s.id) as total,
+            (select count(*)::int from compras_itens_nota l where l.chave = s.chave) as itens_nota,
+            n.total_centavos as total_nota, n.subtotal_centavos as subtotal_nota, n.descontos_centavos as descontos_nota
+       from compras_sessoes s
+       left join compras_mercados m on m.id = s.mercado_id
+       left join compras_notas n on n.chave = s.chave
+      where s.chave is not null or exists (select 1 from compras_itens i where i.sessao_id = s.id)
+      order by s.created_at desc limit $1`,
     [limite],
-  )) as { id: string; nome: string | null; orcamento_centavos: number | null; chave: string | null; created_at: Date; mercado_id: string | null; mercado_nome: string | null; mercado_cnpj: string | null; itens: number; total: number }[];
-  return rows.map((r) => ({
-    id: Number(r.id),
-    nome: r.nome,
-    mercado: r.mercado_id ? toMercado({ id: r.mercado_id, nome: r.mercado_nome!, cnpj: r.mercado_cnpj }) : null,
-    orcamentoCentavos: r.orcamento_centavos,
-    chave: r.chave,
-    criadaEm: new Date(r.created_at).toISOString(),
-    itens: r.itens,
-    totalCentavos: r.total,
-  }));
+  )) as {
+    id: string; nome: string | null; orcamento_centavos: number | null; chave: string | null; created_at: Date; concluida_em: Date | null;
+    mercado_id: string | null; mercado_nome: string | null; mercado_cnpj: string | null; itens: number; total: number;
+    itens_nota: number; total_nota: number | null; subtotal_nota: number | null; descontos_nota: number | null;
+  }[];
+  return rows.map((r) => {
+    const pagoNota = r.chave ? (r.total_nota ?? (r.subtotal_nota !== null ? r.subtotal_nota - (r.descontos_nota ?? 0) : null)) : null;
+    return {
+      id: Number(r.id),
+      nome: r.nome,
+      mercado: r.mercado_id ? toMercado({ id: r.mercado_id, nome: r.mercado_nome!, cnpj: r.mercado_cnpj }) : null,
+      orcamentoCentavos: r.orcamento_centavos,
+      chave: r.chave,
+      criadaEm: new Date(r.created_at).toISOString(),
+      concluidaEm: r.concluida_em ? new Date(r.concluida_em).toISOString() : null,
+      /** Itens anotados no mercado. */
+      itensAnotados: r.itens,
+      totalAnotadoCentavos: r.total,
+      /** O que a lista mostra: os da nota quando existe, senão os anotados. */
+      itens: r.chave ? r.itens_nota : r.itens,
+      totalCentavos: pagoNota ?? r.total,
+    };
+  });
 }
 
 export async function getSessao(id: number): Promise<Sessao | null> {
   const s = (await sql().query(
-    `select s.id, s.nome, s.orcamento_centavos, s.desconto_manual_centavos, s.chave, s.created_at, s.mercado_id from compras_sessoes s where s.id = $1`,
+    `select s.id, s.nome, s.orcamento_centavos, s.desconto_manual_centavos, s.chave, s.created_at, s.concluida_em, s.mercado_id from compras_sessoes s where s.id = $1`,
     [id],
-  )) as { id: string; nome: string | null; orcamento_centavos: number | null; desconto_manual_centavos: number | null; chave: string | null; created_at: Date; mercado_id: string | null }[];
+  )) as { id: string; nome: string | null; orcamento_centavos: number | null; desconto_manual_centavos: number | null; chave: string | null; created_at: Date; concluida_em: Date | null; mercado_id: string | null }[];
   if (!s[0]) return null;
   const itens = ((await sql().query(`select * from compras_itens where sessao_id = $1 order by id`, [id])) as ItemRow[]).map(toItem);
   const total = itens.reduce((t, i) => t + i.valorCentavos, 0);
@@ -579,6 +617,7 @@ export async function getSessao(id: number): Promise<Sessao | null> {
     descontoManualCentavos: s[0].desconto_manual_centavos,
     chave: s[0].chave,
     criadaEm: new Date(s[0].created_at).toISOString(),
+    concluidaEm: s[0].concluida_em ? new Date(s[0].concluida_em).toISOString() : null,
     itens,
     totalCentavos: total,
     saldoCentavos: orc === null ? null : orc - total,
@@ -589,7 +628,7 @@ export async function getSessao(id: number): Promise<Sessao | null> {
 
 export async function atualizarSessao(
   id: number,
-  dados: { nome?: string | null; orcamentoCentavos?: number | null; descontoManualCentavos?: number | null; mercadoId?: number | null; mercadoNome?: string },
+  dados: { nome?: string | null; orcamentoCentavos?: number | null; descontoManualCentavos?: number | null; mercadoId?: number | null; mercadoNome?: string; concluida?: boolean },
 ): Promise<Sessao> {
   const atual = await getSessao(id);
   if (!atual) throw new ErroCompras("sessão não encontrada", 404);
@@ -604,14 +643,25 @@ export async function atualizarSessao(
   const novoMercado = await resolverMercado(dados);
   const mercadoId = novoMercado === undefined ? (atual.mercado?.id ?? null) : novoMercado;
   await sql().query(
-    `update compras_sessoes set nome = $2, orcamento_centavos = $3, desconto_manual_centavos = $4, mercado_id = $5, updated_at = now() where id = $1`,
-    [id, nome, orc, desc, mercadoId],
+    `update compras_sessoes set nome = $2, orcamento_centavos = $3, desconto_manual_centavos = $4, mercado_id = $5,
+       concluida_em = case when $6::boolean is null then concluida_em when $6 then coalesce(concluida_em, now()) else null end,
+       updated_at = now() where id = $1`,
+    [id, nome, orc, desc, mercadoId, dados.concluida ?? null],
   );
   return (await getSessao(id))!;
 }
 
+/** Apaga a compra e a nota dela (se nenhuma outra compra usa a mesma nota). Produtos ficam. */
 export async function apagarSessao(id: number): Promise<boolean> {
-  return (await sql().query(`delete from compras_sessoes where id = $1 returning id`, [id])).length > 0;
+  const rows = (await sql().query(`delete from compras_sessoes where id = $1 returning chave`, [id])) as { chave: string | null }[];
+  if (!rows[0]) return false;
+  if (rows[0].chave) {
+    await sql().query(
+      `delete from compras_notas n where n.chave = $1 and not exists (select 1 from compras_sessoes s where s.chave = n.chave)`,
+      [rows[0].chave],
+    );
+  }
+  return true;
 }
 
 export interface DadosItem {
