@@ -453,6 +453,8 @@ export interface ItemSessao {
   precoUnitario: number;
   valorCentavos: number;
   emPromocao: boolean;
+  /** Modo caixa: você marcou se a promoção passou certa no caixa. */
+  conferidoCaixa: "ok" | "errado" | null;
   criadoEm: string;
 }
 
@@ -467,6 +469,9 @@ export interface Sessao {
   itens: ItemSessao[];
   totalCentavos: number;
   saldoCentavos: number | null;
+  /** Quanto do orçamento já foi (0–100+); alertaOrcamento a partir de 90%. */
+  percentualOrcamento: number | null;
+  alertaOrcamento: boolean;
 }
 
 interface ItemRow {
@@ -480,6 +485,7 @@ interface ItemRow {
   preco_unitario: string;
   valor_centavos: number;
   em_promocao: boolean;
+  conferido_caixa: "ok" | "errado" | null;
   created_at: Date;
 }
 
@@ -494,6 +500,7 @@ const toItem = (r: ItemRow): ItemSessao => ({
   precoUnitario: Number(r.preco_unitario),
   valorCentavos: r.valor_centavos,
   emPromocao: r.em_promocao,
+  conferidoCaixa: r.conferido_caixa ?? null,
   criadoEm: new Date(r.created_at).toISOString(),
 });
 
@@ -506,15 +513,33 @@ async function resolverMercado(dados: { mercadoId?: number | null; mercadoNome?:
   return dados.mercadoId;
 }
 
-export async function criarSessao(dados: { nome?: string; orcamentoCentavos?: number; mercadoId?: number; mercadoNome?: string }): Promise<Sessao> {
+export async function criarSessao(dados: {
+  nome?: string; orcamentoCentavos?: number; mercadoId?: number; mercadoNome?: string;
+  /** "Comprar de novo": copia o que foi comprado naquela compra como lista desta. */
+  comprarDeNovoDe?: number;
+}): Promise<Sessao> {
   const orc = dados.orcamentoCentavos;
   if (orc !== undefined && orc !== null && !(Number.isSafeInteger(orc) && orc > 0)) throw new ErroCompras("orcamentoCentavos deve ser inteiro positivo");
+  if (dados.comprarDeNovoDe !== undefined && !(await getSessao(dados.comprarDeNovoDe))) throw new ErroCompras("compra de origem não encontrada", 404);
   const mercadoId = (await resolverMercado(dados)) ?? null;
   const rows = (await sql().query(
     `insert into compras_sessoes (nome, orcamento_centavos, mercado_id) values ($1, $2, $3) returning id`,
     [dados.nome?.trim() || null, orc ?? null, mercadoId],
   )) as { id: string }[];
-  return (await getSessao(Number(rows[0]!.id)))!;
+  const id = Number(rows[0]!.id);
+  if (dados.comprarDeNovoDe !== undefined) {
+    // Uma linha por produto (ou por nome, no que foi só ditado), somando as quantidades: duas calabresas viram "2".
+    await sql().query(
+      `insert into compras_planejados (sessao_id, produto_id, descricao, quantidade, unidade)
+       select $1, max(i.produto_id), coalesce(max(p.nome), min(i.descricao)), sum(i.quantidade), min(i.unidade)
+         from compras_itens i left join compras_produtos p on p.id = i.produto_id
+        where i.sessao_id = $2
+        group by coalesce(i.produto_id::text, lower(i.descricao))
+        order by min(i.id)`,
+      [id, dados.comprarDeNovoDe],
+    );
+  }
+  return (await getSessao(id))!;
 }
 
 export async function listarSessoes(limite = 20) {
@@ -557,6 +582,8 @@ export async function getSessao(id: number): Promise<Sessao | null> {
     itens,
     totalCentavos: total,
     saldoCentavos: orc === null ? null : orc - total,
+    percentualOrcamento: orc === null ? null : Math.round((total / orc) * 1000) / 10,
+    alertaOrcamento: orc !== null && total >= orc * 0.9,
   };
 }
 
@@ -600,6 +627,8 @@ export interface DadosItem {
   /** Etiqueta de balança: o valor do pacote já vem no código. */
   valorCentavos?: number;
   emPromocao?: boolean;
+  /** Modo caixa: "ok" (passou com desconto), "errado" (cobrou cheio) ou null (desmarcar). */
+  conferidoCaixa?: "ok" | "errado" | null;
 }
 
 interface ItemPronto {
@@ -612,12 +641,15 @@ interface ItemPronto {
   precoUnitario: number;
   valorCentavos: number;
   emPromocao: boolean;
+  conferidoCaixa: "ok" | "errado" | null;
+  /** Último preço do produto naquele mercado (para dizer se mudou). */
+  anterior: Produto["ultimoPreco"];
 }
 
 async function montarItem(d: DadosItem, mercadoId: number | null, base?: ItemSessao): Promise<ItemPronto> {
   let item: ItemPronto = base
-    ? { ...base }
-    : { produtoId: null, descricao: "", textoOriginal: null, codigoLido: null, quantidade: 1, unidade: "UN", precoUnitario: 0, valorCentavos: 0, emPromocao: false };
+    ? { ...base, anterior: null }
+    : { produtoId: null, descricao: "", textoOriginal: null, codigoLido: null, quantidade: 1, unidade: "UN", precoUnitario: 0, valorCentavos: 0, emPromocao: false, conferidoCaixa: null, anterior: null };
 
   if (d.texto !== undefined) {
     let lido;
@@ -647,6 +679,7 @@ async function montarItem(d: DadosItem, mercadoId: number | null, base?: ItemSes
   if (d.produtoId !== undefined && !produto) throw new ErroCompras("produto não encontrado", 404);
   if (produto) {
     item.produtoId = produto.id;
+    item.anterior = produto.ultimoPreco;
     if (!d.texto && !base) {
       item.descricao = produto.nome;
       item.unidade = produto.unidade;
@@ -668,6 +701,10 @@ async function montarItem(d: DadosItem, mercadoId: number | null, base?: ItemSes
     item.precoUnitario = d.precoUnitario;
   }
   if (d.emPromocao !== undefined) item.emPromocao = d.emPromocao === true;
+  if (d.conferidoCaixa !== undefined) {
+    if (d.conferidoCaixa !== null && d.conferidoCaixa !== "ok" && d.conferidoCaixa !== "errado") throw new ErroCompras("conferidoCaixa deve ser ok, errado ou null");
+    item.conferidoCaixa = d.conferidoCaixa;
+  }
 
   const valor = d.valorCentavos ?? balancaCentavos;
   if (valor !== undefined && valor !== null) {
@@ -687,17 +724,56 @@ async function montarItem(d: DadosItem, mercadoId: number | null, base?: ItemSes
   return item;
 }
 
-export async function adicionarItem(sessaoId: number, dados: DadosItem): Promise<{ item: ItemSessao; sessao: Sessao }> {
+export interface ItemAdicionado {
+  item: ItemSessao;
+  sessao: Sessao;
+  /** Último preço daquele produto no mercado (nota ou anotado), para o app mostrar "antes era". */
+  precoAnterior: Produto["ultimoPreco"];
+  /** O preço anotado é diferente do anterior: só aí o app pede atenção. */
+  mudouPreco: boolean;
+  diferencaPrecoCentavos: number | null;
+  /** Item da lista "comprar de novo" que este marcou. */
+  planejadoId: number | null;
+}
+
+/** Marca o primeiro item da lista que bate com o anotado: mesmo produto ou, sem produto, nome parecido. */
+async function marcarNaLista(sessaoId: number, item: ItemSessao): Promise<number | null> {
+  const abertos = (await sql().query(
+    `select id, produto_id, descricao from compras_planejados where sessao_id = $1 and item_id is null and not marcado order by id`,
+    [sessaoId],
+  )) as { id: string; produto_id: string | null; descricao: string }[];
+  const alvo =
+    abertos.find((p) => item.produtoId !== null && num(p.produto_id) === item.produtoId) ??
+    abertos.find((p) => {
+      const s = similaridade(item.descricao, p.descricao);
+      return Math.min(s.anotado, similaridade(p.descricao, item.descricao).anotado) >= 0.75;
+    });
+  if (!alvo) return null;
+  await sql().query(`update compras_planejados set item_id = $2, produto_id = coalesce(produto_id, $3) where id = $1`, [alvo.id, item.id, item.produtoId]);
+  return Number(alvo.id);
+}
+
+export async function adicionarItem(sessaoId: number, dados: DadosItem): Promise<ItemAdicionado> {
   const sessao = await getSessao(sessaoId);
   if (!sessao) throw new ErroCompras("sessão não encontrada", 404);
-  const i = await montarItem(dados, sessao.mercado?.id ?? null);
+  const i = await montarItem({ ...dados, conferidoCaixa: undefined }, sessao.mercado?.id ?? null);
   const rows = (await sql().query(
     `insert into compras_itens (sessao_id, produto_id, descricao, texto_original, codigo_lido, quantidade, unidade, preco_unitario, valor_centavos, em_promocao)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
     [sessaoId, i.produtoId, i.descricao, i.textoOriginal, i.codigoLido, i.quantidade, i.unidade, i.precoUnitario, i.valorCentavos, i.emPromocao],
   )) as ItemRow[];
-  await sql().query(`update compras_sessoes set updated_at = now() where id = $1`, [sessaoId]);
-  return { item: toItem(rows[0]!), sessao: (await getSessao(sessaoId))! };
+  const item = toItem(rows[0]!);
+  const planejadoId = await marcarNaLista(sessaoId, item);
+  const anterior = i.anterior;
+  const diferenca = anterior ? Math.round((i.precoUnitario - anterior.precoUnitario) * 100) : null;
+  return {
+    item,
+    sessao: (await getSessao(sessaoId))!,
+    precoAnterior: anterior,
+    mudouPreco: diferenca !== null && diferenca !== 0,
+    diferencaPrecoCentavos: diferenca,
+    planejadoId,
+  };
 }
 
 export async function editarItem(sessaoId: number, itemId: number, dados: DadosItem): Promise<{ item: ItemSessao; sessao: Sessao }> {
@@ -707,17 +783,120 @@ export async function editarItem(sessaoId: number, itemId: number, dados: DadosI
   const i = await montarItem(dados, sessao.mercado?.id ?? null, atual);
   const rows = (await sql().query(
     `update compras_itens set produto_id = $3, descricao = $4, texto_original = $5, codigo_lido = $6, quantidade = $7, unidade = $8,
-       preco_unitario = $9, valor_centavos = $10, em_promocao = $11
+       preco_unitario = $9, valor_centavos = $10, em_promocao = $11, conferido_caixa = $12
      where id = $2 and sessao_id = $1 returning *`,
-    [sessaoId, itemId, i.produtoId, i.descricao, i.textoOriginal, i.codigoLido, i.quantidade, i.unidade, i.precoUnitario, i.valorCentavos, i.emPromocao],
+    [sessaoId, itemId, i.produtoId, i.descricao, i.textoOriginal, i.codigoLido, i.quantidade, i.unidade, i.precoUnitario, i.valorCentavos, i.emPromocao, i.conferidoCaixa],
   )) as ItemRow[];
   return { item: toItem(rows[0]!), sessao: (await getSessao(sessaoId))! };
 }
 
-export async function apagarItem(sessaoId: number, itemId: number): Promise<Sessao> {
-  const rows = await sql().query(`delete from compras_itens where id = $2 and sessao_id = $1 returning id`, [sessaoId, itemId]);
+/**
+ * Apaga sem pedir confirmação. Devolve o item removido inteiro: o "Desfazer" do app só manda ele de volta em
+ * POST /itens (produtoId, descricao, quantidade, unidade, precoUnitario, valorCentavos, emPromocao).
+ */
+export async function apagarItem(sessaoId: number, itemId: number): Promise<Sessao & { removido: ItemSessao }> {
+  const rows = (await sql().query(`delete from compras_itens where id = $2 and sessao_id = $1 returning *`, [sessaoId, itemId])) as ItemRow[];
   if (!rows.length) throw new ErroCompras("item não encontrado", 404);
-  return (await getSessao(sessaoId))!;
+  return { ...(await getSessao(sessaoId))!, removido: toItem(rows[0]!) };
+}
+
+// ───────── comprar de novo (lista da compra) ─────────
+
+export interface Planejado {
+  id: number;
+  produtoId: number | null;
+  descricao: string;
+  quantidade: number;
+  unidade: Unidade;
+  pego: boolean;
+  itemId: number | null;
+}
+
+export async function getLista(sessaoId: number): Promise<{ itens: Planejado[]; pegos: number; faltam: number }> {
+  if (!(await getSessao(sessaoId))) throw new ErroCompras("sessão não encontrada", 404);
+  const rows = (await sql().query(
+    `select id, produto_id, descricao, quantidade, unidade, item_id, marcado from compras_planejados where sessao_id = $1 order by id`,
+    [sessaoId],
+  )) as { id: string; produto_id: string | null; descricao: string; quantidade: string; unidade: Unidade; item_id: string | null; marcado: boolean }[];
+  const itens = rows.map((r) => ({
+    id: Number(r.id), produtoId: num(r.produto_id), descricao: r.descricao, quantidade: Number(r.quantidade), unidade: r.unidade,
+    pego: r.marcado || r.item_id !== null, itemId: num(r.item_id),
+  }));
+  const pegos = itens.filter((i) => i.pego).length;
+  return { itens, pegos, faltam: itens.length - pegos };
+}
+
+export async function adicionarPlanejado(sessaoId: number, d: { descricao?: string; produtoId?: number; quantidade?: number; unidade?: Unidade }) {
+  if (!(await getSessao(sessaoId))) throw new ErroCompras("sessão não encontrada", 404);
+  const produto = d.produtoId !== undefined ? await getProduto(d.produtoId) : null;
+  if (d.produtoId !== undefined && !produto) throw new ErroCompras("produto não encontrado", 404);
+  const descricao = (d.descricao?.trim() || produto?.nome || "").slice(0, 120);
+  if (!descricao) throw new ErroCompras("descricao ou produtoId é obrigatório");
+  const quantidade = d.quantidade ?? 1;
+  if (!(quantidade > 0)) throw new ErroCompras("quantidade deve ser maior que zero");
+  const unidade = d.unidade ?? produto?.unidade ?? "UN";
+  if (unidade !== "UN" && unidade !== "KG") throw new ErroCompras("unidade deve ser UN ou KG");
+  await sql().query(
+    `insert into compras_planejados (sessao_id, produto_id, descricao, quantidade, unidade) values ($1, $2, $3, $4, $5)`,
+    [sessaoId, produto?.id ?? null, descricao, quantidade, unidade],
+  );
+  return getLista(sessaoId);
+}
+
+export async function editarPlanejado(sessaoId: number, id: number, d: { quantidade?: number; descricao?: string; pego?: boolean }) {
+  if (d.quantidade !== undefined && !(d.quantidade > 0)) throw new ErroCompras("quantidade deve ser maior que zero");
+  if (d.descricao !== undefined && (!d.descricao.trim() || d.descricao.length > 120)) throw new ErroCompras("descricao inválida");
+  const rows = await sql().query(
+    `update compras_planejados set quantidade = coalesce($3, quantidade), descricao = coalesce($4, descricao),
+       marcado = coalesce($5, marcado), item_id = case when $5 = false then null else item_id end
+     where id = $2 and sessao_id = $1 returning id`,
+    [sessaoId, id, d.quantidade ?? null, d.descricao?.trim() ?? null, d.pego ?? null],
+  );
+  if (!rows.length) throw new ErroCompras("item da lista não encontrado", 404);
+  return getLista(sessaoId);
+}
+
+export async function apagarPlanejado(sessaoId: number, id: number) {
+  const rows = await sql().query(`delete from compras_planejados where id = $2 and sessao_id = $1 returning id`, [sessaoId, id]);
+  if (!rows.length) throw new ErroCompras("item da lista não encontrado", 404);
+  return getLista(sessaoId);
+}
+
+// ───────── modo caixa ─────────
+
+/**
+ * Todos os itens marcados como promoção, para conferir enquanto o caixa passa. Antes da nota, vale o que você marcou
+ * (ok/errado); depois da nota, cada um diz também se a nota cobrou o preço da promoção.
+ */
+export async function modoCaixa(sessaoId: number) {
+  const sessao = await getSessao(sessaoId);
+  if (!sessao) throw new ErroCompras("sessão não encontrada", 404);
+  const promocoes = sessao.itens.filter((i) => i.emPromocao);
+  const daNota = new Map<number, { promocao: "aplicada" | "nao_aplicada" | null; valorNotaCentavos: number; precoNota: number }>();
+  if (sessao.chave) {
+    const r = await relatorio(sessaoId);
+    for (const p of r.pares) {
+      const precoNota = p.linhas[0]!.precoUnitario;
+      for (const a of p.anotados) daNota.set(a.id, { promocao: p.promocao, valorNotaCentavos: p.valorNotaCentavos, precoNota });
+    }
+  }
+  const itens = promocoes.map((i) => ({
+    id: i.id,
+    descricao: i.descricao,
+    quantidade: i.quantidade,
+    unidade: i.unidade,
+    precoPromocao: i.precoUnitario,
+    valorCentavos: i.valorCentavos,
+    conferidoCaixa: i.conferidoCaixa,
+    nota: sessao.chave ? (daNota.get(i.id) ?? { promocao: null, valorNotaCentavos: 0, precoNota: 0 }) : null,
+  }));
+  return {
+    temNota: sessao.chave !== null,
+    itens,
+    pendentes: itens.filter((i) => i.conferidoCaixa === null).length,
+    ok: itens.filter((i) => i.conferidoCaixa === "ok").length,
+    errados: itens.filter((i) => i.conferidoCaixa === "errado").length,
+  };
 }
 
 // ───────── nota e conferência ─────────
@@ -849,6 +1028,8 @@ export interface Relatorio extends Conciliacao {
   nota: { chave: string; estabelecimento: string | null; cnpj: string; numero: string; serie: string; emitidaEm: string | null; origem: string } | null;
   /** Depois da nota: o que subiu ou baixou desde a última compra no mesmo mercado, e o que saiu mais barato em outro. */
   precos: { subiram: VariacaoPreco[]; baixaram: VariacaoPreco[]; maisBaratoEmOutroMercado: VariacaoPreco[] };
+  /** "Comprar de novo": o que estava na lista e não foi pego. */
+  faltouDaLista: Planejado[];
 }
 
 const pct = (de: number, para: number) => (de > 0 ? Math.round(((para - de) / de) * 1000) / 10 : 0);
@@ -955,6 +1136,7 @@ export async function relatorio(sessaoId: number, limiteCentavos?: number): Prom
     },
     ...c,
     precos: await variacoes(nota.chave, linhas, sessao.mercado?.id ?? null),
+    faltouDaLista: (await getLista(sessaoId)).itens.filter((i) => !i.pego),
   };
 }
 

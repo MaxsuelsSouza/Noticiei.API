@@ -168,6 +168,14 @@ importa a NFC-e e a API confere item a item e aponta as divergências grandes na
 - **Preços:** `relatorio.precos` traz o que subiu ou baixou desde a última compra no mesmo mercado e o que saiu mais
   barato em outro. `GET /produtos/{id}/precos` é o histórico do produto; `GET /precos` lista o que foi comprado em
   2+ mercados com o último preço de cada um.
+- **Na hora de bipar:** `POST /sessoes/{id}/itens` devolve `precoAnterior` (último preço naquele mercado) e
+  `mudouPreco`: o app só pede atenção quando o preço da prateleira é diferente. A sessão traz `percentualOrcamento` e
+  `alertaOrcamento` (90% do orçamento). Apagar não pede confirmação e devolve `removido`, que o Desfazer manda de volta.
+- **Modo caixa** (`GET /sessoes/{id}/caixa`): os itens em promoção, para marcar `conferidoCaixa: ok | errado` enquanto o
+  caixa passa; depois da nota, cada um diz se a nota cobrou o preço da promoção. A foto da etiqueta fica só no celular
+  (pasta do app, fora da galeria) e é apagada ao terminar a compra.
+- **Comprar de novo:** `POST /sessoes { comprarDeNovoDe }` copia o que foi comprado como lista (`/sessoes/{id}/lista`,
+  editável). Anotar um item marca a linha da lista (mesmo produto ou nome parecido); o relatório traz `faltouDaLista`.
 - **Caso de teste:** a compra de 31/10/2026 no Atacadão ([test/fixtures](test/fixtures/compra-2026-10-31.ts)) fecha
   R$ 856,00 + 11,98 + 100,62 = 968,60 − 16,87 = 951,73.
 

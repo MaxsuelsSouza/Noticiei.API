@@ -2,7 +2,7 @@ import { comTabelas } from "../src/editais/http.js";
 import { isApp, json, unauthorized } from "../src/http.js";
 import { acharChave, baixarNota, lerNota } from "../src/compras/nota.js";
 import {
-  adicionarItem, aplicarParesSeguros, compararPrecos, criarMercado, historicoPrecos, listarMercados, renomearMercado, apagarItem, apagarSessao, atualizarSessao, buscarProdutos, confirmarPar, criarProduto, criarSessao,
+  adicionarItem, adicionarPlanejado, apagarPlanejado, editarPlanejado, getLista, modoCaixa, aplicarParesSeguros, compararPrecos, criarMercado, historicoPrecos, listarMercados, renomearMercado, apagarItem, apagarSessao, atualizarSessao, buscarProdutos, confirmarPar, criarProduto, criarSessao,
   editarItem, ErroCompras, getProduto, getSessao, lerCodigoDeBarras, listarSessoes, relatorio, renomearProduto,
   salvarNota, vincularCodigo,
 } from "../src/compras/store.js";
@@ -24,13 +24,20 @@ import {
  *   GET    /api/compras/produtos/{id}/precos             histórico de preço pago, por mercado
  *   GET    /api/compras/precos                           produtos comprados em 2+ mercados: último preço em cada um
  *   GET    /api/compras/sessoes                          compras recentes
- *   POST   /api/compras/sessoes                          { nome?, orcamentoCentavos?, mercadoId? | mercadoNome? } abre a compra
+ *   POST   /api/compras/sessoes                          { nome?, orcamentoCentavos?, mercadoId? | mercadoNome?, comprarDeNovoDe? }
+ *                                                        abre a compra (comprarDeNovoDe = id da compra a repetir como lista)
  *   GET    /api/compras/sessoes/{id}                     itens, total e saldo
  *   PATCH  /api/compras/sessoes/{id}                     { nome?, orcamentoCentavos?, descontoManualCentavos?, mercadoId? | mercadoNome? }
  *   DELETE /api/compras/sessoes/{id}
  *   POST   /api/compras/sessoes/{id}/itens               { texto } ou { codigo | produtoId, quantidade?, precoUnitario?, emPromocao? }
- *   PATCH  /api/compras/sessoes/{id}/itens/{itemId}      mesmo corpo
- *   DELETE /api/compras/sessoes/{id}/itens/{itemId}
+ *                                                        → { item, sessao, precoAnterior, mudouPreco, planejadoId }
+ *   PATCH  /api/compras/sessoes/{id}/itens/{itemId}      mesmo corpo, mais { conferidoCaixa: ok | errado | null }
+ *   DELETE /api/compras/sessoes/{id}/itens/{itemId}      sem confirmação; devolve { ...sessao, removido } para o Desfazer
+ *   GET    /api/compras/sessoes/{id}/lista               "comprar de novo": o que pegar, marcado sozinho ao anotar
+ *   POST   /api/compras/sessoes/{id}/lista               { descricao? | produtoId?, quantidade?, unidade? }
+ *   PATCH  /api/compras/sessoes/{id}/lista/{pid}         { quantidade?, descricao?, pego? }
+ *   DELETE /api/compras/sessoes/{id}/lista/{pid}
+ *   GET    /api/compras/sessoes/{id}/caixa               modo caixa: itens em promoção, o que você marcou e (depois) a nota
  *   POST   /api/compras/sessoes/{id}/nota                { conteudo (HTML, XML ou texto copiado), url?, chave? } ou só { url }
  *   GET    /api/compras/sessoes/{id}/relatorio[?limite=100]   conferência + preços (subiu, baixou, mais barato em outro mercado)
  *   POST   /api/compras/sessoes/{id}/pareamentos         { itemIds, itemNotaIds, nome? } confirma ou corrige um par
@@ -120,6 +127,7 @@ async function rotear(request: Request): Promise<Response> {
         const dados = (b && typeof b === "object" ? b : {}) as Record<string, unknown>;
         return json(await criarSessao({
           nome: texto(dados.nome), orcamentoCentavos: numero(dados.orcamentoCentavos), mercadoId: numero(dados.mercadoId), mercadoNome: texto(dados.mercadoNome),
+          comprarDeNovoDe: numero(dados.comprarDeNovoDe),
         }), 201);
       }
       return json({ error: "método não permitido" }, 405);
@@ -158,6 +166,7 @@ async function rotear(request: Request): Promise<Response> {
         precoUnitario: numero(b.precoUnitario),
         valorCentavos: numero(b.valorCentavos),
         emPromocao: typeof b.emPromocao === "boolean" ? b.emPromocao : undefined,
+        conferidoCaixa: "conferidoCaixa" in b ? (b.conferidoCaixa as "ok" | "errado" | null) : undefined,
       });
       if (!subId && metodo === "POST") return json(await adicionarItem(id, dadosItem(await corpo(request))), 201);
       const itemId = idDe(subId);
@@ -166,6 +175,24 @@ async function rotear(request: Request): Promise<Response> {
       if (metodo === "DELETE") return json(await apagarItem(id, itemId));
       return json({ error: "método não permitido" }, 405);
     }
+
+    if (acao === "lista") {
+      if (!subId && metodo === "GET") return json(await getLista(id));
+      if (!subId && metodo === "POST") {
+        const b = await corpo(request);
+        return json(await adicionarPlanejado(id, { descricao: texto(b.descricao), produtoId: numero(b.produtoId), quantidade: numero(b.quantidade), unidade: texto(b.unidade) as "UN" | "KG" | undefined }), 201);
+      }
+      const pid = idDe(subId);
+      if (!pid) return naoEncontrada();
+      if (metodo === "PATCH") {
+        const b = await corpo(request);
+        return json(await editarPlanejado(id, pid, { quantidade: numero(b.quantidade), descricao: texto(b.descricao), pego: typeof b.pego === "boolean" ? b.pego : undefined }));
+      }
+      if (metodo === "DELETE") return json(await apagarPlanejado(id, pid));
+      return json({ error: "método não permitido" }, 405);
+    }
+
+    if (acao === "caixa" && !subId && metodo === "GET") return json(await modoCaixa(id));
 
     if (acao === "nota" && !subId && metodo === "POST") {
       const b = await corpo(request);

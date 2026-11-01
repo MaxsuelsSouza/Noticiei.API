@@ -285,3 +285,74 @@ test("reservas numa função só: mesmo comportamento pelo caminho e pelo ?dia= 
   assert.equal((await reservas.PUT(new Request("https://x.app/api/reservas/31-12", { method: "PUT", headers: h, body: "{}" }))).status, 400);
   assert.equal((await reservas.GET(new Request("https://x.app/api/reservas", { headers: h }))).status, 400);
 });
+
+test("na hora de bipar: preço anterior, só avisa quando mudou, aviso de 90% do orçamento", async () => {
+  const atacadao = (await chamar("GET", "mercados")).body.mercados.find((m: any) => m.cnpj === "75315333005097").id;
+  const s = (await chamar("POST", "sessoes", { mercadoId: atacadao, orcamentoCentavos: 1000 })).body.id;
+  // Sem preço: entra com o último preço daquele mercado (4,99 da última nota) e não pede atenção.
+  const igual = (await chamar("POST", `sessoes/${s}/itens`, { codigo: EAN_ARROZ })).body;
+  assert.deepEqual([igual.precoAnterior.precoUnitario, igual.precoAnterior.origem, igual.mudouPreco], [4.99, "nota", false]);
+  assert.equal(igual.sessao.alertaOrcamento, false);
+  // Preço da prateleira diferente: pede atenção e diz quanto mudou.
+  const mudou = (await chamar("POST", `sessoes/${s}/itens`, { codigo: EAN_ARROZ, precoUnitario: 4.2 })).body;
+  assert.deepEqual([mudou.mudouPreco, mudou.diferencaPrecoCentavos], [true, -79]);
+  assert.deepEqual([mudou.sessao.percentualOrcamento, mudou.sessao.alertaOrcamento], [91.9, true]);
+  // Ditado sem produto: não tem anterior.
+  const novo = (await chamar("POST", `sessoes/${s}/itens`, { texto: "1 abacate 3,50" })).body;
+  assert.deepEqual([novo.precoAnterior, novo.mudouPreco], [null, false]);
+});
+
+test("apagar sem confirmação e desfazer mandando o item de volta", async () => {
+  const s = (await chamar("POST", "sessoes", {})).body.id;
+  const item = (await chamar("POST", `sessoes/${s}/itens`, { texto: "2 sardinha 4,99", emPromocao: true })).body.item;
+  const apagado = (await chamar("DELETE", `sessoes/${s}/itens/${item.id}`)).body;
+  assert.equal(apagado.itens.length, 0);
+  const { produtoId, descricao, quantidade, unidade, precoUnitario, valorCentavos, emPromocao } = apagado.removido;
+  const volta = (await chamar("POST", `sessoes/${s}/itens`, { produtoId: produtoId ?? undefined, descricao, quantidade, unidade, precoUnitario, valorCentavos, emPromocao })).body;
+  assert.deepEqual([volta.item.descricao, volta.item.valorCentavos, volta.item.emPromocao], ["Sardinha", 998, true]);
+});
+
+test("modo caixa: promoções para conferir no caixa; depois da nota diz se veio com desconto", async () => {
+  const caixa = (await chamar("GET", `sessoes/${sessaoId}/caixa`)).body;
+  assert.equal(caixa.temNota, true);
+  const saco = caixa.itens.find((i: any) => i.descricao === "Saco de lixo");
+  assert.deepEqual([saco.precoPromocao, saco.conferidoCaixa, saco.nota.promocao, saco.nota.precoNota], [10.96, null, "nao_aplicada", 12.9]);
+  const marcado = (await chamar("PATCH", `sessoes/${sessaoId}/itens/${saco.id}`, { conferidoCaixa: "errado" })).body;
+  assert.equal(marcado.item.conferidoCaixa, "errado");
+  const depois = (await chamar("GET", `sessoes/${sessaoId}/caixa`)).body;
+  assert.deepEqual([depois.errados, depois.pendentes], [1, depois.itens.length - 1]);
+  assert.equal((await chamar("PATCH", `sessoes/${sessaoId}/itens/${saco.id}`, { conferidoCaixa: "talvez" })).status, 400);
+
+  // Antes da nota: só o que você marcou.
+  const s = (await chamar("POST", "sessoes", {})).body.id;
+  await chamar("POST", `sessoes/${s}/itens`, { texto: "1 detergente 2,29", emPromocao: true });
+  const antes = (await chamar("GET", `sessoes/${s}/caixa`)).body;
+  assert.deepEqual([antes.temNota, antes.itens[0].nota, antes.pendentes], [false, null, 1]);
+});
+
+test("comprar de novo: lista da compra anterior, marcada ao anotar, editável", async () => {
+  const s = (await chamar("POST", "sessoes", { comprarDeNovoDe: sessaoId })).body.id;
+  let lista = (await chamar("GET", `sessoes/${s}/lista`)).body;
+  const calabresa = lista.itens.find((i: any) => /calabresa/i.test(i.descricao));
+  assert.equal(calabresa.quantidade, 2, "as duas calabresas viram uma linha com 2");
+  assert.equal(lista.pegos, 0);
+  const total = lista.itens.length;
+
+  // Bipar o arroz marca o item da lista sozinho; ditar "feijão" também (nome parecido).
+  const arroz = (await chamar("POST", `sessoes/${s}/itens`, { codigo: EAN_ARROZ })).body;
+  assert.ok(arroz.planejadoId);
+  lista = (await chamar("GET", `sessoes/${s}/lista`)).body;
+  assert.equal(lista.pegos, 1);
+
+  // Remover da lista, adicionar coisa nova, marcar à mão.
+  await chamar("DELETE", `sessoes/${s}/lista/${calabresa.id}`);
+  lista = (await chamar("POST", `sessoes/${s}/lista`, { descricao: "Óleo de soja", quantidade: 2 })).body;
+  assert.equal(lista.itens.length, total);
+  const oleo = lista.itens.find((i: any) => i.descricao === "Óleo de soja");
+  lista = (await chamar("PATCH", `sessoes/${s}/lista/${oleo.id}`, { pego: true })).body;
+  assert.equal(lista.pegos, 2);
+
+  // Apagar o item anotado desmarca a lista.
+  await chamar("DELETE", `sessoes/${s}/itens/${arroz.item.id}`);
+  assert.equal((await chamar("GET", `sessoes/${s}/lista`)).body.pegos, 1);
+});
