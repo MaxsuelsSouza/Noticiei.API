@@ -1,7 +1,7 @@
 /** Consultas das rotas /api/editais. */
 import { sql } from "../db.js";
 import { TIME_ZONE } from "../time.js";
-import { atributos } from "./atributos.js";
+import { atributos, salarioGeral } from "./atributos.js";
 import { acessoDe, NOME_FASE, type Agregado } from "./avaliar.js";
 import type { Fase } from "./extract.js";
 
@@ -55,6 +55,16 @@ const colunas = () => sql()`
 
 function cartao(l: Linha) {
   const r = l.resumo;
+  // Concurso fora do perfil e do escopo geral (desde a 024 a coleta guarda todos) não tem o salário gravado:
+  // mostra o maior salário citado no concurso.
+  const geral = l.salario_inicial_centavos === null && l.salario_final_centavos === null ? salarioGeral({ salarios: r?.salarios ?? [] }) : null;
+  const salario = geral
+    ? {
+        inicialCentavos: geral.inicialCentavos,
+        finalCentavos: geral.finalCentavos,
+        situacao: geral.inicialCentavos ? "ok" : geral.finalCentavos ? "so_final" : l.situacao_salario,
+      }
+    : { inicialCentavos: l.salario_inicial_centavos, finalCentavos: l.salario_final_centavos, situacao: l.situacao_salario };
   return {
     id: Number(l.id),
     orgao: l.orgao_nome,
@@ -63,7 +73,7 @@ function cartao(l: Linha) {
     fase: l.fase,
     faseNome: NOME_FASE[l.fase],
     area: l.area,
-    salario: { inicialCentavos: l.salario_inicial_centavos, finalCentavos: l.salario_final_centavos, situacao: l.situacao_salario },
+    salario,
     inscricoesAte: l.inscricoes_ate,
     diasParaFecharInscricao: l.dias_inscricao,
     provaEm: l.prova_em,
