@@ -97,8 +97,17 @@ test("anotar: pelo código, pelo texto ditado e pelos campos; total e saldo a ca
 });
 
 test("nota: HTML baixado pelo celular → conferência com alertas e conta fechada", async () => {
+  // Na frente do caixa: a importação + conferência inteira cabe em poucas idas ao banco (72 linhas, 61 anotações).
+  const original = sql.query;
+  let consultas = 0;
+  sql.query = (async (...args: Parameters<typeof original>) => {
+    consultas++;
+    return original(...args);
+  }) as typeof original;
   const r = await chamar("POST", `sessoes/${sessaoId}/nota`, { conteudo: HTML_SEFAZ, url: URL_QR });
+  sql.query = original;
   assert.equal(r.status, 201);
+  assert.ok(consultas <= 45, `importação fez ${consultas} consultas`);
   assert.equal(r.body.nova, true);
   assert.equal(r.body.nota.origem, "html");
   assert.equal(r.body.resumo.totalAnotadoCentavos, 85600);

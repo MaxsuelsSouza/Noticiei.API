@@ -188,8 +188,9 @@ async function rotear(request: Request): Promise<Response> {
         throw new ErroCompras((e as Error).message, 422);
       }
       const { nova, mercadoCorrigido, produtosCriados } = await salvarNota(id, nota, conteudo);
-      await aplicarParesSeguros(id, produtosCriados);
-      return json({ nova, mercadoCorrigido, produtosCriados: produtosCriados.length, ...(await relatorio(id)) }, nova ? 201 : 200);
+      let rel = await relatorio(id);
+      if (await aplicarParesSeguros(id, produtosCriados, rel)) rel = await relatorio(id);
+      return json({ nova, mercadoCorrigido, produtosCriados: produtosCriados.length, ...rel }, nova ? 201 : 200);
     }
 
     if (acao === "relatorio" && !subId && metodo === "GET") {

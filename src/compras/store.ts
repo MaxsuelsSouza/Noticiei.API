@@ -280,12 +280,24 @@ async function vincularLido(produtoId: number, entrada: string, mercadoId: numbe
 
 /** Junta produtos que são o mesmo: códigos, anotações e histórico passam para o destino. */
 async function mesclar(destino: number, origens: number[]): Promise<void> {
-  const outros = [...new Set(origens)].filter((id) => id !== destino);
-  if (!outros.length) return;
-  await sql().query(`update compras_codigos set produto_id = $1 where produto_id = any($2::bigint[])`, [destino, outros]);
-  await sql().query(`update compras_itens set produto_id = $1 where produto_id = any($2::bigint[])`, [destino, outros]);
-  await sql().query(`delete from compras_produtos where id = any($1::bigint[])`, [outros]);
-  await sql().query(`update compras_produtos set updated_at = now() where id = $1`, [destino]);
+  await mesclarVarios(origens.map((o) => [destino, o]));
+}
+
+/** Várias junções de uma vez (3 consultas no total), para a importação da nota não ficar lenta no caixa. */
+async function mesclarVarios(pares: [destino: number, origem: number][]): Promise<void> {
+  const validos = pares.filter(([d, o]) => d !== o);
+  if (!validos.length) return;
+  const destinos = validos.map(([d]) => d);
+  const origens = validos.map(([, o]) => o);
+  await sql().query(
+    `update compras_codigos c set produto_id = v.d from unnest($1::bigint[], $2::bigint[]) as v(o, d) where c.produto_id = v.o`,
+    [origens, destinos],
+  );
+  await sql().query(
+    `update compras_itens i set produto_id = v.d from unnest($1::bigint[], $2::bigint[]) as v(o, d) where i.produto_id = v.o`,
+    [origens, destinos],
+  );
+  await sql().query(`delete from compras_produtos where id = any($1::bigint[])`, [origens]);
 }
 
 async function produtoDaLinhaNota(itemNotaId: number): Promise<number | null> {
@@ -748,23 +760,71 @@ export async function salvarNota(sessaoId: number, nota: NotaLida, bruto: string
   const nova = inserida.length > 0;
   const produtosCriados: number[] = [];
   if (nova) {
-    for (const i of nota.itens) {
-      await sql().query(
-        `insert into compras_itens_nota (chave, ordem, codigo_loja, ean, descricao, quantidade, unidade, preco_unitario, valor_centavos, desconto_centavos)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [nota.chave, i.ordem, i.codigoLoja, i.ean, i.descricao, i.quantidade, i.unidade, i.precoUnitario, i.valorCentavos, i.descontoCentavos],
-      );
-      const peloLoja = i.codigoLoja ? await produtoDoCodigo("loja", i.codigoLoja, nota.cnpj) : null;
-      const peloEan = i.ean ? await produtoDoCodigo("ean", i.ean) : null;
-      if (peloEan && !peloLoja && i.codigoLoja) await vincular(peloEan.id, "loja", i.codigoLoja, nota.cnpj);
-      else if (peloLoja && i.ean && !peloEan) await vincular(peloLoja.id, "ean", i.ean);
-      else if (!peloLoja && !peloEan && (i.codigoLoja || i.ean)) {
-        const rows = (await sql().query(`insert into compras_produtos (nome, unidade) values ($1, $2) returning id`, [nomeLegivel(i.descricao), i.unidade])) as { id: string }[];
-        const id = Number(rows[0]!.id);
-        if (i.codigoLoja) await vincular(id, "loja", i.codigoLoja, nota.cnpj);
-        if (i.ean) await vincular(id, "ean", i.ean);
-        produtosCriados.push(id);
+    const it = nota.itens;
+    await sql().query(
+      `insert into compras_itens_nota (chave, ordem, codigo_loja, ean, descricao, quantidade, unidade, preco_unitario, valor_centavos, desconto_centavos)
+       select $1, * from unnest($2::int[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::text[], $8::numeric[], $9::int[], $10::int[])`,
+      [nota.chave, it.map((i) => i.ordem), it.map((i) => i.codigoLoja), it.map((i) => i.ean), it.map((i) => i.descricao), it.map((i) => i.quantidade),
+        it.map((i) => i.unidade), it.map((i) => i.precoUnitario), it.map((i) => i.valorCentavos), it.map((i) => i.descontoCentavos)],
+    );
+
+    // Produtos que os códigos já conhecem, numa consulta só.
+    const lojas = [...new Set(it.map((i) => i.codigoLoja).filter((c): c is string => !!c))];
+    const eans = [...new Set(it.map((i) => i.ean).filter((c): c is string => !!c))];
+    const conhecidos = (await sql().query(
+      `select tipo, codigo, produto_id from compras_codigos
+        where (tipo = 'loja' and escopo = $1 and codigo = any($2::text[])) or (tipo = 'ean' and escopo = '' and codigo = any($3::text[]))`,
+      [nota.cnpj, lojas, eans],
+    )) as { tipo: "loja" | "ean"; codigo: string; produto_id: string }[];
+    const porLoja = new Map(conhecidos.filter((c) => c.tipo === "loja").map((c) => [c.codigo, Number(c.produto_id)]));
+    const porEan = new Map(conhecidos.filter((c) => c.tipo === "ean").map((c) => [c.codigo, Number(c.produto_id)]));
+
+    // Linhas sem produto: um produto novo por código (a mesma linha repetida na nota não cria dois).
+    const novos: { nome: string; unidade: Unidade; loja: string | null; ean: string | null }[] = [];
+    const novoPor = new Map<string, (typeof novos)[number]>();
+    const vinculos = new Map<string, { tipo: "loja" | "ean"; escopo: string; codigo: string; produto: number | (typeof novos)[number] }>();
+    for (const i of it) {
+      const p = (i.codigoLoja ? porLoja.get(i.codigoLoja) : undefined) ?? (i.ean ? porEan.get(i.ean) : undefined);
+      if (p !== undefined) {
+        if (i.codigoLoja && !porLoja.has(i.codigoLoja)) vinculos.set(`loja|${i.codigoLoja}`, { tipo: "loja", escopo: nota.cnpj, codigo: i.codigoLoja, produto: p });
+        if (i.ean && !porEan.has(i.ean)) vinculos.set(`ean|${i.ean}`, { tipo: "ean", escopo: "", codigo: i.ean, produto: p });
+        continue;
       }
+      if (!i.codigoLoja && !i.ean) continue;
+      const chaveNovo = i.codigoLoja ? `loja|${i.codigoLoja}` : `ean|${i.ean}`;
+      let novo = novoPor.get(chaveNovo) ?? (i.ean ? novoPor.get(`ean|${i.ean}`) : undefined);
+      if (!novo) {
+        novo = { nome: nomeLegivel(i.descricao), unidade: i.unidade, loja: i.codigoLoja, ean: i.ean };
+        novos.push(novo);
+      }
+      if (i.codigoLoja) {
+        novoPor.set(`loja|${i.codigoLoja}`, novo);
+        vinculos.set(`loja|${i.codigoLoja}`, { tipo: "loja", escopo: nota.cnpj, codigo: i.codigoLoja, produto: novo });
+      }
+      if (i.ean) {
+        novoPor.set(`ean|${i.ean}`, novo);
+        vinculos.set(`ean|${i.ean}`, { tipo: "ean", escopo: "", codigo: i.ean, produto: novo });
+      }
+    }
+
+    // Ids reservados antes de inserir: assim cada produto novo sabe o seu id sem depender da ordem do RETURNING.
+    const ids = new Map<(typeof novos)[number], number>();
+    if (novos.length) {
+      const seq = (await sql().query(`select nextval(pg_get_serial_sequence('compras_produtos', 'id')) as id from generate_series(1, $1::int)`, [novos.length])) as { id: string }[];
+      novos.forEach((n, k) => ids.set(n, Number(seq[k]!.id)));
+      await sql().query(
+        `insert into compras_produtos (id, nome, unidade) select * from unnest($1::bigint[], $2::text[], $3::text[])`,
+        [novos.map((n) => ids.get(n)), novos.map((n) => n.nome), novos.map((n) => n.unidade)],
+      );
+      produtosCriados.push(...novos.map((n) => ids.get(n)!));
+    }
+    const lista = [...vinculos.values()];
+    if (lista.length) {
+      await sql().query(
+        `insert into compras_codigos (tipo, escopo, codigo, produto_id) select * from unnest($1::text[], $2::text[], $3::text[], $4::bigint[])
+         on conflict (tipo, escopo, codigo) do update set produto_id = excluded.produto_id`,
+        [lista.map((v) => v.tipo), lista.map((v) => v.escopo), lista.map((v) => v.codigo), lista.map((v) => (typeof v.produto === "number" ? v.produto : ids.get(v.produto)))],
+      );
     }
   }
   await sql().query(`update compras_sessoes set chave = $2, updated_at = now() where id = $1`, [sessaoId, nota.chave]);
@@ -903,10 +963,12 @@ export async function relatorio(sessaoId: number, limiteCentavos?: number): Prom
  * anotação foi escaneada (produto com código de barras) e a linha criou um produto agora, os dois viram um só, e o
  * código de barras passa a valer junto com o código da loja. Pares "provavel" esperam a sua confirmação.
  */
-export async function aplicarParesSeguros(sessaoId: number, criadosAgora: number[]): Promise<void> {
-  if (!criadosAgora.length) return;
+export async function aplicarParesSeguros(sessaoId: number, criadosAgora: number[], r: Relatorio): Promise<boolean> {
+  if (!criadosAgora.length) return false;
   const novos = new Set(criadosAgora);
-  const r = await relatorio(sessaoId);
+  const juntar: [number, number][] = [];
+  const itens: number[] = [];
+  const produtos: number[] = [];
   for (const par of r.pares) {
     if (par.confianca !== "nome") continue;
     const daLinha = [...new Set(par.linhas.map((l) => l.produtoId).filter((p): p is number => p !== null))];
@@ -914,9 +976,20 @@ export async function aplicarParesSeguros(sessaoId: number, criadosAgora: number
     const doItem = [...new Set(par.anotados.map((a) => a.produtoId).filter((p): p is number => p !== null))];
     if (doItem.length > 1) continue;
     const destino = doItem[0] ?? daLinha[0]!;
-    if (doItem.length) await mesclar(destino, daLinha);
-    await sql().query(`update compras_itens set produto_id = $3 where sessao_id = $1 and id = any($2::bigint[])`, [sessaoId, par.anotados.map((a) => a.id), destino]);
+    if (doItem.length) juntar.push([destino, daLinha[0]!]);
+    for (const a of par.anotados) {
+      itens.push(a.id);
+      produtos.push(destino);
+    }
   }
+  await mesclarVarios(juntar);
+  if (itens.length) {
+    await sql().query(
+      `update compras_itens i set produto_id = v.p from unnest($2::bigint[], $3::bigint[]) as v(id, p) where i.sessao_id = $1 and i.id = v.id`,
+      [sessaoId, itens, produtos],
+    );
+  }
+  return itens.length > 0;
 }
 
 /**
