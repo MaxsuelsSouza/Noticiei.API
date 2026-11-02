@@ -41,11 +41,13 @@ resumo diário balanceado que o app Android lê em voz alta às 05:30.
 
 | `* /api/compras/*` | `x-api-key` | Lista de compras e conferência da NFC-e (veja [Compras](#compras-lista-e-conferência-da-nfc-e)). |
 | `* /api/livros/*` | `x-api-key` (app ou LivreQ) | Ponte com o LivreQ: catálogo de livros, textos escritos no celular e ideias (veja [Livros](#livros-ponte-com-o-livreq)). |
+| `* /api/adaptacoes/*` | `x-api-key` | Livros que vão virar filme ou série, com nota de fama do livro (veja [Adaptações](#adaptações-livros-que-vão-virar-filme-ou-série)). |
+| `GET /api/cron/adaptacoes` | `Authorization: Bearer CRON_SECRET` | Rotina das adaptações (08:00 UTC = 05:00 em Brasília). |
 | `GET /api/health` | opcional | Sem chave: `{ok:true}`. Com chave: fontes ativas/desativadas e último digest. |
 
 > **Limite de 12 funções do plano Hobby (estamos em 12):** todos os crons ficam em [api/cron/[job].ts](api/cron/[job].ts),
 > as rotas `/api/editais/*` em [api/editais.ts](api/editais.ts), `/api/reservas/*` em [api/reservas.ts](api/reservas.ts),
-> `/api/compras/*` em [api/compras.ts](api/compras.ts) e `/api/livros/*` em [api/trilha.ts](api/trilha.ts) (o
+> `/api/compras/*` em [api/compras.ts](api/compras.ts) e `/api/livros/*` e `/api/adaptacoes/*` em [api/trilha.ts](api/trilha.ts) (o
 > `vercel.json` reescreve cada `/<rota>` para lá). Rota nova entra numa dessas, não em arquivo novo.
 
 ## Como funciona a rotina diária
@@ -220,6 +222,52 @@ escreve textos e lança ideias; o LivreQ mostra os textos novos para colar onde 
   LivreQ para o computador não guardar a chave do app.
 - Palavras contadas como no LivreQ (letras e números; travessão não conta).
 
+## Adaptações: livros que vão virar filme ou série
+
+Lista as adaptações de livro que ainda não estrearam, ordenadas por uma **nota de fama do livro**. Tudo por regras,
+sem IA. Tabelas da [026](db/migrations/026_adaptacoes.sql), código em [src/adaptacoes](src/adaptacoes)
+(`regras.ts` puro, `fontes.ts` clientes, `coleta.ts` rotina, `store.ts` consultas, `rotas.ts` rotas), servido pela
+função da trilha.
+
+**Rotina** (cron `adaptacoes`, 08:00 UTC = 05:00 em Brasília, ou `POST /api/adaptacoes/atualizar`; `npm run adaptacoes` local):
+1. **TMDB** (`TMDB_API_KEY`): filmes e séries com a palavra-chave 818 ("based on novel or book"). Filmes com estreia de
+   hoje a 24 meses; séries planejadas, em produção, piloto ou com estreia nesse prazo. Detalhe de cada uma: status,
+   datas (e a do Brasil, nos filmes), capa, direção e o autor creditado na equipe ("Novel", "Book", "Author").
+2. **Ligação com o livro**, nesta ordem: Wikidata ("baseado em", P144) → Open Library por título + autor creditado →
+   Open Library só pelo título (`origem: titulo`, o app mostra "livro a confirmar") → `nenhum` (tenta de novo em 7 dias).
+   A escolha manual do app (`origem: manual`) nunca é trocada pela rotina.
+3. **Sinais do livro:** leitores na Open Library ("quero ler" + "lendo" + "lido", renovados a cada 30 dias) e histórico
+   na lista de mais vendidos do NYT (`NYT_API_KEY`, opcional): até 12 consultas por rodada, 12 s entre elas; um `429`
+   encerra o NYT na rodada. Cada livro é consultado de novo depois de 30 dias.
+
+O relatório da rodada (`job_runs` e resposta do `atualizar`) traz `ligacao` (quantas ligaram por cada caminho): é a
+medida de acerto do módulo.
+
+**Fase** (`regras.ts`): `anunciado`, `producao`, `pos`, `com_data`, `lancado`, `cancelado`. Rumor do TMDB não entra
+(fica para a fase 2). Filme em produção com data continua `producao` (a data costuma ser palpite); série com estreia
+futura já é `com_data`. Mudança de fase (ou de data, dentro de `com_data`) vira linha em `adaptacoes_fases` e atualiza
+`faseMudouEm`, que o app usa para avisar.
+
+**Nota (0 a 100):** NYT até 50 (70% semanas na lista, teto 52; 30% melhor posição) + leitores até 30 (escala
+logarítmica, 5 mil já vale tudo: os números da Open Library são pequenos) + popularidade do TMDB até 20 (percentil
+entre as adaptações da lista). Não é filtro: tudo entra, e cada aba mostra as 30 de maior nota.
+
+| Rota | O que faz |
+| --- | --- |
+| `GET /api/adaptacoes` | `{ atualizadoEm, data, anunciados }`: as 30 de maior nota em cada aba (`data` = `com_data`; `anunciados` = `anunciado`, `producao` e `pos`). Some o que a rotina não vê há 7 dias, o cancelado e o oculto. |
+| `GET /api/adaptacoes?ids=m1,t2` | Itens pelo id (aba Seguindo), mesmo os que estrearam, sumiram ou foram ocultados. |
+| `GET /api/adaptacoes/{id}` | Detalhe com `fases` (histórico). Id: `m<tmdb>` (filme) ou `t<tmdb>` (série). |
+| `GET /api/adaptacoes/livros?q=` | Busca na Open Library (folha "Qual é o livro?"). |
+| `PUT /api/adaptacoes/{id}/livro` | `{ olKey, titulo, autor?, ano?, leitores? }` escolhe o livro (manual); `{ naoLivro: true\|false }` tira da lista / desfaz. Responde o detalhe. |
+| `POST /api/adaptacoes/atualizar` | Roda a rotina agora (até ~270 s) e devolve o relatório. |
+
+Cada item traz `livro` (`titulo`, `autor`, `ano`, `leitores`, `nytSemanas`, `nytMelhor`, `origem`) e `nota`
+(`total`, `nyt`, `leitores`, `popularidade`). Sem `TMDB_API_KEY` a rotina responde `{ ignorado }` e a lista fica vazia.
+O TMDB pede crédito ("usa a API do TMDB, sem ser endossado por ele"): o app mostra no rodapé do módulo.
+
+**Limites conhecidos:** filme sem data no TMDB quase não aparece (o "discover" filtra por data); a lista do NYT é do
+mercado dos EUA e começa em 2008; a ligação pelo título erra quando o livro tem outro nome.
+
 ## Check-in na academia
 
 `POST /api/checkin` faz o login no site da academia (Supabase Auth), lê as aulas do dia, escolhe a aula pelo horário
@@ -258,6 +306,8 @@ npm test && npm run typecheck
    - `CRON_SECRET` — `openssl rand -hex 32` (a Vercel usa automaticamente no cron)
    - `LIVREQ_API_KEY` — opcional, `openssl rand -hex 32` (a chave que o LivreQ usa; só abre `/api/livros/*`)
    - `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — opcionais, app do tipo *script* em https://www.reddit.com/prefs/apps
+   - `TMDB_API_KEY` — chave do TMDB (https://www.themoviedb.org/settings/api; v3 ou token de leitura v4), para Adaptações
+   - `NYT_API_KEY` — opcional, Books API do NYT (https://developer.nytimes.com), para as semanas na lista em Adaptações
 3. Depois do primeiro deploy, gere o primeiro digest sem esperar o cron:
    `curl -X POST -H "x-api-key: $APP_API_KEY" https://<seu-projeto>.vercel.app/api/digest/refresh`
 

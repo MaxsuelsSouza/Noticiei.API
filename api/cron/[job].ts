@@ -1,3 +1,4 @@
+import { runAdaptacoes } from "../../src/adaptacoes/coleta.js";
 import { runAcompanhamento, runEditais } from "../../src/editais/run.js";
 import { isCron, json, unauthorized } from "../../src/http.js";
 import { runDaily } from "../../src/pipeline.js";
@@ -11,12 +12,14 @@ import { runDaily } from "../../src/pipeline.js";
  * - editais (03:00) e editais-acompanhar (04:00): tudo pronto às 05:00.
  * - editais-10h, -15h, -20h: coletas extras; editais-acompanhar-11h, -16h, -21h: lê os PDFs e os favoritos
  *   do que essas coletas acharam.
+ * - adaptacoes (05:00): livros que vão virar filme ou série (TMDB, Wikidata, Open Library e NYT).
  */
 const coleta = (job: string) => () => runEditais({ job });
 const acompanhamento = (job: string) => () => runAcompanhamento({ job });
 
 const JOBS: Record<string, () => Promise<unknown>> = {
   daily: () => runDaily(),
+  adaptacoes: () => runAdaptacoes(),
   editais: coleta("editais"),
   "editais-acompanhar": acompanhamento("editais-acompanhar"),
   "editais-10h": coleta("editais-10h"),

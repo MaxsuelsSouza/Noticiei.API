@@ -10,7 +10,8 @@
     "test": "node --experimental-test-module-mocks --import tsx --test test/*.test.ts",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "daily": "node --env-file-if-exists=.env --import tsx scripts/run-daily.ts",
-    "editais": "node --env-file-if-exists=.env --import tsx scripts/run-editais.ts"
+    "editais": "node --env-file-if-exists=.env --import tsx scripts/run-editais.ts",
+    "adaptacoes": "node --env-file-if-exists=.env --import tsx scripts/run-adaptacoes.ts"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

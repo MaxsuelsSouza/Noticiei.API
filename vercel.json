@@ -36,6 +36,10 @@
     {
       "path": "/api/cron/editais-acompanhar-21h",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/adaptacoes",
+      "schedule": "0 8 * * *"
     }
   ],
   "fluid": true,
@@ -57,6 +61,10 @@
     {
       "source": "/api/livros/:rota*",
       "destination": "/api/trilha?livros=:rota*"
+    },
+    {
+      "source": "/api/adaptacoes/:rota*",
+      "destination": "/api/trilha?adaptacoes=:rota*"
     },
     {
       "source": "/api/compras/:rota*",

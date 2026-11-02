@@ -32,6 +32,14 @@ export const env = {
   get livreqApiKey() {
     return process.env.LIVREQ_API_KEY || null;
   },
+  /** Adaptações: chave do TMDB (v3 ou token de leitura v4). Sem ela a rotina das adaptações não roda. */
+  get tmdbApiKey() {
+    return process.env.TMDB_API_KEY || null;
+  },
+  /** Adaptações (opcional): chave da API de livros do NYT, para as semanas na lista de mais vendidos. */
+  get nytApiKey() {
+    return process.env.NYT_API_KEY || null;
+  },
   get reddit() {
     const clientId = process.env.REDDIT_CLIENT_ID;
     const clientSecret = process.env.REDDIT_CLIENT_SECRET;
